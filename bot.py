@@ -3,10 +3,10 @@ import hashlib
 import hmac
 from bs4 import BeautifulSoup
 from requests.exceptions import ReadTimeout, ConnectionError
-import time
-import threading
+# import time
+# import threading
 import asyncio
-from contextlib import suppress
+from discord.ext import tasks
 import discord
 from discord import app_commands
 
@@ -151,6 +151,8 @@ class MyBot(discord.Client):
     async def setup_hook(self):
         self.tree.copy_global_to(guild=GUILD_ID)
         await self.tree.sync(guild=GUILD_ID)
+        if not traffic_check_task.is_running():
+            traffic_check_task.start()
 
 bot = MyBot()
 
@@ -266,15 +268,16 @@ async def purge_any(interaction: discord.Interaction, amount: int):
 bot.tree.add_command(purge_group)
 
 # ========= THREADS =========
-def run_check_loop():
-    while True:
-        try:
-            check_and_lock(bot)
-        except Exception as e:
-            print(f"Error: {e}")
-        time.sleep(3600)
+@tasks.loop(hours=1.0)
+async def traffic_check_task():
+    try:
+        check_and_lock(bot)
+    except Exception as e:
+        print(f"Error: {e}")
 
-threading.Thread(target=run_check_loop, daemon=True).start()
+@traffic_check_task.before_loop
+async def before_traffic_check():
+    await bot.wait_until_ready()
 
 async def main():
     try:
@@ -288,7 +291,6 @@ if __name__ == "__main__":
     try:
         asyncio.run(main())
     except KeyboardInterrupt:
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
+        pass
     finally:
         print("\n[!] Bot has been stopped")
