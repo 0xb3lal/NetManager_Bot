@@ -272,7 +272,7 @@ def run_check_loop():
             check_and_lock(bot)
         except Exception as e:
             print(f"Error: {e}")
-        time.sleep(15)
+        time.sleep(3600)
 
 threading.Thread(target=run_check_loop, daemon=True).start()
 
