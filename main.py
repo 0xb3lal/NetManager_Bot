@@ -9,8 +9,8 @@ import discord
 from discord import app_commands
 
 # ========= CONFIG =========
-D_USERNAME = "01552802883"
-D_PASSWORD = "123"
+D_USERNAME = "01552802883" # Dashboard Username (radiusmanager/user.php)
+D_PASSWORD = "123"         # Dashboard Password (radiusmanager/user.php)
 ROUTER_URL = "http://192.168.1.1:7080"
 ROUTER_AUTH = ("belal", "107003##$$")
 THRESHOLD = 3.0
@@ -115,14 +115,30 @@ def check_and_lock(bot_instance):
     msg = ""
     if traffic_value < THRESHOLD:
         enable_lockdown(router, headers, force_lock=True)
-        msg = f"⚠️ **LOCKDOWN enabled.**\n```\nBalance: {available_traffic}\nLimit: {THRESHOLD}```"
+        msg = f"⚠️ **LOCKDOWN enabled.**\n```\n📊 Balance: {available_traffic}\n⏳ Limit: {THRESHOLD}```"
     else:
         enable_lockdown(router, headers, force_lock=False)
-        msg = f"✅ **Normal Mode.**\n```\nBalance: {available_traffic}\nLimit: {THRESHOLD}```"
+        msg = f"✅ **Normal Mode.**\n```\n📊 Balance: {available_traffic}\n⏳ Limit: {THRESHOLD}```"
 
     channel = bot_instance.get_channel(CHANNEL_ID)
     if channel:
         bot_instance.loop.create_task(channel.send(msg))
+
+# ========= Get Balance Only =========
+def get_balance():
+    session = requests.Session()
+    md5_password = hex_md5(D_PASSWORD)
+    md5_final = hex_hmac_md5(D_USERNAME, md5_password)
+    payload = {"username": D_USERNAME, "md5": md5_final, "Submit": "Submit"}
+    session.post("http://10.0.0.254/radiusmanager/user.php?cont=login", data=payload)
+    session.get("http://10.0.0.254/radiusmanager/user.php?cont=change_lang&lang=English")
+    dash = session.get("http://10.0.0.254/radiusmanager/user.php")
+    soup = BeautifulSoup(dash.text, "html.parser")
+
+    for td in soup.find_all("td"):
+        if "Available total traffic" in td.get_text(strip=True):
+            return td.find_next_sibling("td").get_text(strip=True)
+    return None
 
 # ========= DISCORD BOT SETUP =========
 class MyBot(discord.Client):
@@ -216,6 +232,15 @@ async def list_banned(interaction: discord.Interaction):
         banned_list = "No MACs banned"
     await interaction.response.send_message(f"**Banned MACs:**\n```\n{banned_list}```")
 
+# --------- /balance---------
+@bot.tree.command(name="balance", description="Check current available traffic")
+async def balance(interaction: discord.Interaction):
+    await interaction.response.defer() 
+    traffic = get_balance()
+    if traffic:
+        await interaction.followup.send(f"📊 **Current Balance:** __{traffic}__")
+    else:
+        await interaction.followup.send("❌ Could not fetch balance. Check logs.")
 
 # ========= Manage commands =========
 purge_group = app_commands.Group(name="purge", description="Commands to delete messages")
@@ -245,7 +270,7 @@ def run_check_loop():
             check_and_lock(bot)
         except Exception as e:
             print(f"Error: {e}")
-        time.sleep(3600)
+        time.sleep(15)
 
 threading.Thread(target=run_check_loop, daemon=True).start()
 
