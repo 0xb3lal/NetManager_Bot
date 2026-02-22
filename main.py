@@ -5,7 +5,8 @@ from bs4 import BeautifulSoup
 from requests.exceptions import ReadTimeout, ConnectionError
 import time
 import threading
-import discord 
+import asyncio
+import discord
 from discord import app_commands
 
 # ========= CONFIG =========
@@ -274,4 +275,10 @@ def run_check_loop():
 
 threading.Thread(target=run_check_loop, daemon=True).start()
 
-bot.run(DISCORD_TOKEN)
+async def main():
+    async with bot:
+        await bot.start(DISCORD_TOKEN)
+try:
+    asyncio.run(main())
+except KeyboardInterrupt:
+    print("\n[!] Stopping bot")
