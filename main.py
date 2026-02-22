@@ -6,6 +6,7 @@ from requests.exceptions import ReadTimeout, ConnectionError
 import time
 import threading
 import asyncio
+from contextlib import suppress
 import discord
 from discord import app_commands
 
@@ -276,9 +277,18 @@ def run_check_loop():
 threading.Thread(target=run_check_loop, daemon=True).start()
 
 async def main():
-    async with bot:
-        await bot.start(DISCORD_TOKEN)
-try:
-    asyncio.run(main())
-except KeyboardInterrupt:
-    print("\n[!] Stopping bot")
+    try:
+        async with bot:
+            await bot.start(DISCORD_TOKEN)
+    except asyncio.CancelledError:
+        pass
+
+if __name__ == "__main__":
+    print("[*] Bot has been running")
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+    finally:
+        print("\n[!] Bot has been stopped")
