@@ -1,3 +1,4 @@
+import os
 import hmac
 import hashlib
 import logging
@@ -37,41 +38,48 @@ MACS_LIST = {
     "D6:62:9E:2B:31:3D": "Yousef"
 }
 # ========= LOGING SYS =========
+log_dir = "logs"
+if not os.path.exists(log_dir):
+    os.makedirs(log_dir)
+
+log_path = os.path.join(log_dir, "bot.log")
+
 class ColorFormatter(logging.Formatter):
     COLORS = {
         "DEBUG": "\033[36m",     # Cyan
-        "INFO": "\033[32m",      # Green
+        #"INFO": "\033[32m",      # Green
+        "INFO": "\033[34m",      # Blue
         "WARNING": "\033[33m",   # Yellow
         "ERROR": "\033[31m",     # Red
         "CRITICAL": "\033[41m",  # Red background
     }
-
     RESET = "\033[0m"
+
     def format(self, record):
         record_copy = copy.copy(record)
-
         levelname = record_copy.levelname
         if levelname in self.COLORS:
             record_copy.levelname = f"{self.COLORS[levelname]}{levelname}{self.RESET}"
-
         return super().format(record_copy)
+
 handler = RotatingFileHandler(
-    "bot.log",
+    log_path,
     maxBytes=5*1024*1024,
     backupCount=1,
-    encoding='utf-8'
+    encoding='utf-8',
+    mode='w' 
 )
 console_handler = logging.StreamHandler()
-
 formatter = logging.Formatter(
-    "%(asctime)s | %(levelname)-8s | %(message)s"
+    fmt="%(asctime)s | %(levelname)-8s | %(message)s",
+    datefmt="%Y-%m-%d %I:%M:%S %p"
 )
 color_formatter = ColorFormatter(
-    "%(asctime)s | %(levelname)-8s | %(message)s"
+    fmt="%(asctime)s | %(levelname)-8s | %(message)s",
+    datefmt="%Y-%m-%d %I:%M:%S %p"
 )
 handler.setFormatter(formatter)
 console_handler.setFormatter(color_formatter)
-
 logging.basicConfig(
     level=logging.INFO,
     handlers=[handler, console_handler]
@@ -411,7 +419,7 @@ async def main():
         logger.warning("Main coroutine cancelled.")
     except Exception as e:
         logger.error(f"Fatal error in main loop: {e}")
-        
+
 if __name__ == "__main__":
     logger.info("--- Starting NetManager Bot ---")
     try:
