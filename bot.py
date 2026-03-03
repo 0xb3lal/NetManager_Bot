@@ -32,7 +32,7 @@ MACS_LIST = {
     "5A:CE:CB:B5:D4:C9": "Ziad",
     "F8:34:41:DA:93:EB": "Me/Windows",
     "22:9F:AE:3B:5D:C4": "Mama",
-    "1A:8C:37:73:23:8C": "Me/Iphone",
+    "4C:20:B8:87:12:E2": "Me/Iphone",
     "F2:72:C9:B8:4B:C7": "Tablet",
     "DC:53:60:73:FD:84": "Kali linux",
     "D6:62:9E:2B:31:3D": "Yousef"
@@ -47,7 +47,6 @@ log_path = os.path.join(log_dir, "bot.log")
 class ColorFormatter(logging.Formatter):
     COLORS = {
         "DEBUG": "\033[36m",     # Cyan
-        #"INFO": "\033[32m",      # Green
         "INFO": "\033[34m",      # Blue
         "WARNING": "\033[33m",   # Yellow
         "ERROR": "\033[31m",     # Red
@@ -113,7 +112,30 @@ def run_cmd(router, headers, cmd):
         logger.error(f"Router Connection Error while executing '{cmd}': {e}")
     except Exception as e:
         logger.error(f"Unexpected error in run_cmd: {e}")
+        
+# ========= ONLINE DEVICES HELPER =========
+def get_router_devices_raw():
+    router = requests.Session()
+    router.auth = ROUTER_AUTH
+    try:
+        url = f"{ROUTER_URL}/status-devices.asp"
+        headers = {
+            "Referer": f"{ROUTER_URL}/",
+            "User-Agent": "Mozilla/5.0",
+            "Accept": "text/html,application/xhtml+xml,xml;q=0.9,*/*;q=0.8"
+        }
+        
+        response = router.get(url, headers=headers, timeout=10)
+        if response.status_code == 200:
+            return response.text
+        return ""
+    except Exception as e:
+        logger.error(f"Error fetching router devices page: {e}")
+        return ""
 
+# ==================================
+
+    
 # ========= LOCKDOWN LOGIC =========
 def clear_lockdown(router, headers):
     logger.info("Clearing all lockdown firewall rules...")
@@ -446,6 +468,72 @@ async def balance(interaction: discord.Interaction):
         )
         await interaction.followup.send(embed=embed)
         logger.error(f"Failed to provide balance to {interaction.user} due to server error.")
+
+# --------- /online ---------
+@bot.tree.command(name="online", description="Show currently active devices")
+async def online(interaction: discord.Interaction):
+    import re
+    logger.info(f"User {interaction.user} requested online devices.")
+    await interaction.response.defer()
+    
+    try:
+        raw_content = get_router_devices_raw()
+        if not raw_content:
+            await interaction.followup.send("⚠️ Router connection failed.")
+            return
+
+        active_devices = []
+        seen_macs = set()
+        
+        device_pattern = r"['\"](([0-9A-Fa-f]{2}[:-]){5}[0-9A-Fa-f]{2})['\"].*?(-\d+)"
+        matches = re.finditer(device_pattern, raw_content, re.DOTALL)
+
+        for match in matches:
+            mac = match.group(1).upper()
+            rssi = int(match.group(3))
+            
+            if rssi >= 0 or rssi < -100:
+                continue
+
+            if mac not in seen_macs:
+                device_name = MACS_LIST.get(mac, "Unknown Device")
+                active_devices.append({
+                    "name": device_name,
+                    "mac": mac,
+                    "rssi": rssi
+                })
+                seen_macs.add(mac)
+
+        active_devices.sort(key=lambda x: x['rssi'], reverse=True)
+
+        if active_devices:
+            embed = discord.Embed(color=0x2ecc71)
+            
+            count = len(active_devices)
+            header = f"📡 **{count} Active Client{'s' if count > 1 else ''}**\n\n"
+            
+            lines = []
+            for dev in active_devices:
+                quality = min(max(2 * (dev['rssi'] + 100), 0), 100)
+                
+                if quality >= 80: icon = "🟢"
+                elif quality >= 50: icon = "🟡"
+                else: icon = "🔴"
+
+                lines.append(f"{icon} **{dev['name']}** — `{quality}%`")
+            
+            embed.description = header + "\n".join(lines)
+        else:
+            embed = discord.Embed(
+                description="✨ No active devices detected.",
+                color=0x95a5a6
+            )
+
+        await interaction.followup.send(embed=embed)
+        
+    except Exception as e:
+        logger.error(f"Error in Tomato parsing: {e}")
+        await interaction.followup.send("⚠️ Parsing error.")
 
 # ========= Manage commands =========
 purge_group = app_commands.Group(name="purge", description="Commands to delete messages")
