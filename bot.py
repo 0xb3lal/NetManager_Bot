@@ -190,19 +190,28 @@ def check_and_lock(bot_instance):
         router.get(ROUTER_URL + "/", timeout=10)
         headers = {"Content-Type": "text/plain;charset=UTF-8", "Referer": ROUTER_URL + "/", "Origin": ROUTER_URL}
 
-        msg = ""
         if traffic_value < THRESHOLD:
             enable_lockdown(router, headers, force_lock=True)
-            msg = f"⚠️ **LOCKDOWN enabled.**\n```\n📊 Balance: {available_traffic}\n⏳ Limit: {THRESHOLD}```"
+            e_title = "⚠️ LOCKDOWN ENABLED"
+            e_color = discord.Color.red()
         else:
             enable_lockdown(router, headers, force_lock=False)
-            msg = f"✅ **Normal Mode.**\n```\n📊 Balance: {available_traffic}\n⏳ Limit: {THRESHOLD}```"
+            e_title = "✅ NORMAL MODE"
+            e_color = discord.Color.green()
 
+        content = f"📊 **Balance:** `{available_traffic}`\n"
+        content += f"⏳ **Limit:** `{THRESHOLD}`"
+
+        embed = discord.Embed(
+            title=e_title,
+            description=content,
+            color=e_color
+        )
         async def safe_send():
             try:
                 channel = bot_instance.get_channel(CHANNEL_ID)
                 if channel:
-                    await channel.send(msg)
+                    await channel.send(embed=embed)
             except Exception as e:
                 logger.exception("Discord send error (Network/Timeout)")
 
@@ -295,21 +304,33 @@ async def ban(interaction: discord.Interaction, mac: str):
         headers = {"Content-Type": "text/plain;charset=UTF-8", "Referer": ROUTER_URL + "/", "Origin": ROUTER_URL}
         mac_upper = mac.upper()
         ban_mac(router, headers, mac_upper)
+        
         current_list = get_banned_list_text()
         device_name = MACS_LIST.get(mac_upper, "Unknown Device")
-        response_msg = (
-            f"🚫 **Blocked:** {device_name} ({mac_upper})\n\n"
-            f"**Updated Banned List:**\n"
-            f"```\n{current_list}```"
-        )   
-        await interaction.response.send_message(response_msg)
+
+        embed = discord.Embed(
+            title="🚫 Device Blocked",
+            description=f"**Device:** `{device_name}`\n**MAC:** `{mac_upper}`",
+            color=discord.Color.red()
+        )
+        
+        embed.add_field(
+            name="📝 Updated Banned List:",
+            value=f"```\n{current_list if current_list else 'No devices banned'}```",
+            inline=False
+        )
+
+        await interaction.response.send_message(embed=embed)
         logger.info(f"SUCCESS: {mac_upper} ({device_name}) blocked by {interaction.user}. Total banned: {len(BANNED_MACS)}")
+        
     except Exception as e:
         logger.error(f"FAILURE: Could not block {mac} for {interaction.user}. Error: {e}")
-        await interaction.response.send_message(
-            f"❌ **Router Error:** Could not apply block. Check `bot.log`.", 
-            ephemeral=True
+        error_embed = discord.Embed(
+            title="❌ Router Error",
+            description="**Status:** `Could not apply block. Check bot.log for details.`",
+            color=discord.Color.dark_red()
         )
+        await interaction.response.send_message(embed=error_embed, ephemeral=True)
 
 # --------- /rm ---------
 @bot.tree.command(name="rm", description="Unban a device from the current banned list")
@@ -322,24 +343,51 @@ async def rm(interaction: discord.Interaction, mac: str):
         headers = {"Content-Type": "text/plain;charset=UTF-8", "Referer": ROUTER_URL + "/", "Origin": ROUTER_URL} 
         mac = mac.upper()
         unban_mac(router, headers, mac)
+        
         current_list = get_banned_list_text()
         device_name = MACS_LIST.get(mac, "Unknown Device")
-        response_msg = (
-            f"✅ **Unblocked:** {device_name} ({mac})\n\n"
-            f"**Updated Banned List:**\n"
-            f"```\n{current_list}```"
+
+        embed = discord.Embed(
+            title="✅ Device Unblocked",
+            description=f"**Device:** `{device_name}`\n**MAC:** `{mac}`",
+            color=discord.Color.green()
         )
-        await interaction.response.send_message(response_msg)
+        
+        embed.add_field(
+            name="📝 Updated Banned List:",
+            value=f"```\n{current_list if current_list else 'No devices banned'}```",
+            inline=False
+        )
+
+        await interaction.response.send_message(embed=embed)
         logger.info(f"SUCCESS: {mac} has been unblocked by {interaction.user}. New list size: {len(BANNED_MACS)}")
+        
     except Exception as e:
         logger.error(f"FAILURE: Could not unblock {mac} for {interaction.user}. Error: {e}")
-        await interaction.response.send_message(f"❌ **Error:** Failed to communicate with the router. Check `bot.log` for details.", ephemeral=True)
+        error_embed = discord.Embed(
+            title="❌ Error",
+            description="**Status:** `Failed to communicate with the router. Check bot.log for details.`",
+            color=discord.Color.red()
+        )
+        await interaction.response.send_message(embed=error_embed, ephemeral=True)
 
 # --------- /macs ---------
 @bot.tree.command(name="macs", description="List known MAC names")
 async def macs(interaction: discord.Interaction):
-    msg = "\n".join(f"{mac} : {name}" for mac, name in MACS_LIST.items())
-    await interaction.response.send_message(f"**MAC Names List:**\n```\n{msg}```")
+    if MACS_LIST:
+        msg = "\n".join(f"`{mac}` : **{name}**" for mac, name in MACS_LIST.items())
+        embed_color = discord.Color.blue()
+    else:
+        msg = "*No MAC addresses found in the list.*"
+        embed_color = discord.Color.light_grey()
+
+    embed = discord.Embed(
+        title="📋 Known MAC Names List",
+        description=msg,
+        color=embed_color
+    )
+
+    await interaction.response.send_message(embed=embed)
 
 # --------- /list---------
 @bot.tree.command(name="list", description="List currently banned MACs")
@@ -348,30 +396,55 @@ async def list_banned(interaction: discord.Interaction):
     try:
         if BANNED_MACS:
             banned_list = "\n".join(
-                f"{i+1}- {m} ({MACS_LIST.get(m, 'Unknown')})" 
+                f"**{i+1}-** `{m}` ({MACS_LIST.get(m, 'Unknown')})" 
                 for i, m in enumerate(BANNED_MACS)
             )
             count = len(BANNED_MACS)
+            embed_color = discord.Color.orange()
         else:
-            banned_list = "No MACs banned"
-            count = 0     
-        await interaction.response.send_message(f"**Banned MACs ({count}):**\n```\n{banned_list}```")
+            banned_list = "*No MACs are currently banned.*"
+            count = 0 
+            embed_color = discord.Color.light_grey()
+
+        embed = discord.Embed(
+            title=f"🚫 Banned MACs List ({count})",
+            description=banned_list,
+            color=embed_color
+        )
+
+        await interaction.response.send_message(embed=embed)
         logger.info(f"Sent banned list ({count} devices) to {interaction.user}.")
+        
     except Exception as e:
         logger.error(f"Error while listing banned MACs for {interaction.user}: {e}")
-        await interaction.response.send_message("❌ An unexpected error occurred while fetching the list.", ephemeral=True)
-
+        error_embed = discord.Embed(
+            title="❌ Error",
+            description="**Status:** `An unexpected error occurred while fetching the list.`",
+            color=discord.Color.red()
+        )
+        await interaction.response.send_message(embed=error_embed, ephemeral=True)
 # --------- /balance---------
 @bot.tree.command(name="balance", description="Check current available traffic")
 async def balance(interaction: discord.Interaction):
     logger.info(f"User {interaction.user} requested balance check.")
     await interaction.response.defer() 
     traffic = get_balance()
+    
     if traffic:
-        await interaction.followup.send(f"\n📊 **Current Balance:** __{traffic}__")
+        embed = discord.Embed(
+            title="📊 Network Status",
+            description=f"**Current Balance:** `{traffic}`",
+            color=discord.Color.blue()
+        )
+        await interaction.followup.send(embed=embed)
         logger.info(f"Balance sent to {interaction.user}: {traffic}")
     else:
-        await interaction.followup.send("\n❌ **Error:** Could not fetch balance. The Radius server might be down.")
+        embed = discord.Embed(
+            title="❌ System Error",
+            description="**Status:** `Could not fetch balance. The Radius server might be down.`",
+            color=discord.Color.red()
+        )
+        await interaction.followup.send(embed=embed)
         logger.error(f"Failed to provide balance to {interaction.user} due to server error.")
 
 # ========= Manage commands =========
