@@ -21,9 +21,8 @@ from requests.exceptions import ReadTimeout, ConnectionError
 load_dotenv()
 D_USERNAME = os.getenv("D_USERNAME")         # Dashboard Username (radiusmanager/user.php)
 D_PASSWORD = os.getenv("D_PASSWORD")         # Dashboard Password (radiusmanager/user.php)
-ROUTER_URL = "http://192.168.1.1:7080"
-ROUTER_AUTH = (os.getenv("ROUTER_USER"),
-               os.getenv("ROUTER_PASS"))
+ROUTER_URL = os.getenv("ROUTER_URL")
+ROUTER_AUTH = (os.getenv("ROUTER_USER"), os.getenv("ROUTER_PASS"))
 THRESHOLD = 3.0
 BANNED_MACS = set()
 DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
