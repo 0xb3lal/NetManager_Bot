@@ -1,4 +1,5 @@
 .env
-/logs
-venv
-/.vscode/
+speed_history/
+logs/
+venv/
+.vscode/

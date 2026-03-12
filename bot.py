@@ -1,29 +1,35 @@
 import os
+import re
 import hmac
 import copy
+import urllib3
 import hashlib
 import logging
 import asyncio
 import discord
 import requests
+import demjson3
+from datetime import datetime
 from discord.ext import tasks
 from bs4 import BeautifulSoup
 from dotenv import load_dotenv
 from discord import app_commands
 from logging.handlers import RotatingFileHandler
 from requests.exceptions import ReadTimeout, ConnectionError
-load_dotenv()
+urllib3.disable_warnings()
 # ========= CONFIG =========
+load_dotenv()
 D_USERNAME = os.getenv("D_USERNAME")         # Dashboard Username (radiusmanager/user.php)
 D_PASSWORD = os.getenv("D_PASSWORD")         # Dashboard Password (radiusmanager/user.php)
-ROUTER_URL = os.getenv("ROUTER_URL")
+ROUTER_URL = "http://192.168.1.1:7080"
 ROUTER_AUTH = (os.getenv("ROUTER_USER"),
                os.getenv("ROUTER_PASS"))
 THRESHOLD = 3.0
 BANNED_MACS = set()
 DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
 GUILD_ID = discord.Object(id=1475047474832867338) 
-CHANNEL_ID = os.getenv("CHANNEL_ID")
+CHANNEL_ID = int(os.getenv("CHANNEL_ID")) if os.getenv("CHANNEL_ID") else 0
+CONFIG_FILE = "settings.conf"
 ALLOWED_MACS = [
     "4C:20:B8:87:12:E2",
     "F8:34:41:DA:93:EB",
@@ -114,7 +120,29 @@ def run_cmd(router, headers, cmd):
         logger.error(f"Router Connection Error while executing '{cmd}': {e}")
     except Exception as e:
         logger.error(f"Unexpected error in run_cmd: {e}")
-        
+
+# ========= LOAD THRESHOLD HELPER =========
+def load_threshold():
+    try:
+        if os.path.exists(CONFIG_FILE):
+            with open(CONFIG_FILE, "r") as f:
+                for line in f:
+                    if line.startswith("THRESHOLD="):
+                        return float(line.split("=")[1].strip())
+    except Exception as e:
+        logger.error(f"Error loading config: {e}")
+    return 3.0  
+
+def save_threshold(value):
+    try:
+        with open(CONFIG_FILE, "w") as f:
+            f.write(f"THRESHOLD={value}\n")
+            f.write(f"# Last Updated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
+    except Exception as e:
+        logger.error(f"Error saving config: {e}")
+
+THRESHOLD = load_threshold()
+
 # ========= ONLINE DEVICES HELPER =========
 def get_router_devices_raw():
     router = requests.Session()
@@ -185,7 +213,6 @@ def unban_mac(router, headers, mac):
     else:
         logger.warning(f"Internal: Attempted to unban {mac} but it wasn't in the list.")
 
-# ========= MAIN CHECK =========
 def check_and_lock(bot_instance):
     session = requests.Session()
     md5_password = hex_md5(D_PASSWORD)
@@ -193,9 +220,9 @@ def check_and_lock(bot_instance):
     payload = {"username": D_USERNAME, "md5": md5_final, "Submit": "Submit"}
 
     try:
-        session.post("http://10.0.0.254/radiusmanager/user.php?cont=login", data=payload)
-        session.get("http://10.0.0.254/radiusmanager/user.php?cont=change_lang&lang=English")
-        dash = session.get("http://10.0.0.254/radiusmanager/user.php")
+        session.post("http://10.0.0.254/radiusmanager/user.php?cont=login", data=payload, timeout=10)
+        session.get("http://10.0.0.254/radiusmanager/user.php?cont=change_lang&lang=English", timeout=10)
+        dash = session.get("http://10.0.0.254/radiusmanager/user.php", timeout=10)
         soup = BeautifulSoup(dash.text, "html.parser")
 
         available_traffic = None
@@ -205,42 +232,46 @@ def check_and_lock(bot_instance):
                 break
 
         if not available_traffic: return
+        
         traffic_value = float(available_traffic.split()[0])
         router = requests.Session()
         router.auth = ROUTER_AUTH
-        router.get(ROUTER_URL + "/", timeout=10)
         headers = {"Content-Type": "text/plain;charset=UTF-8", "Referer": ROUTER_URL + "/", "Origin": ROUTER_URL}
 
         if traffic_value < THRESHOLD:
             enable_lockdown(router, headers, force_lock=True)
-            e_title = "⚠️ LOCKDOWN ENABLED"
-            e_color = discord.Color.red()
+            e_title, e_color = "`❌` System Lockdown", 0xff4747
         else:
             enable_lockdown(router, headers, force_lock=False)
-            e_title = "✅ NORMAL MODE"
-            e_color = discord.Color.green()
+            e_title, e_color = "`✅` System Normal", 0x47ff7e
 
-        content = f"📊 **Balance:** `{available_traffic}`\n"
-        content += f"⏳ **Limit:** `{THRESHOLD}`"
-
+        balance_label = "Balance:".ljust(9)
+        limit_label   = "Limit:".ljust(9)
+        
+        status_box = (
+            f"```\n"
+            f"{balance_label} {available_traffic}\n"
+            f"{limit_label} {THRESHOLD} GB\n"
+            f"```"
+        )
         embed = discord.Embed(
             title=e_title,
-            description=content,
+            description=status_box,
             color=e_color
-        )
+        )   
         async def safe_send():
             try:
                 channel = bot_instance.get_channel(CHANNEL_ID)
                 if channel:
                     await channel.send(embed=embed)
-            except Exception as e:
-                logger.exception("Discord send error (Network/Timeout)")
+            except Exception:
+                logger.error("Failed to push status update to Discord")
 
         if bot_instance.loop.is_running():
             bot_instance.loop.create_task(safe_send())
                 
     except Exception as e:
-        logger.exception("Dashboard/Router Access Error")
+        logger.error(f"Main Check Error: {e}")
 
 # ========= Get Balance Only =========
 def get_balance():
@@ -276,6 +307,67 @@ def get_balance():
     
     return None
 
+# ========= NETWORK USAGE HELPERS =========
+def bytes_to_mb(value):
+    return value / (1024 * 1024)
+
+def get_speed_history():
+    router = requests.Session()
+    router.auth = ROUTER_AUTH
+    router.verify = False
+
+    url = f"{ROUTER_URL}/update.cgi"
+    data = "exec=ipt_bandwidth&arg0=speed&_http_id=TIDe5b1505eeac7f67f"
+    headers = {
+        "Content-Type": "text/plain;charset=UTF-8",
+        "Referer": ROUTER_URL + "/",
+        "Origin": ROUTER_URL
+    }
+    cookies = {
+        "tomato_ipt_tab": "192.168.1.0",
+        "tomato_ipt_refresh": "1"
+    }
+    try:
+        r = router.post(url, headers=headers, cookies=cookies, data=data, timeout=10)
+        match = re.search(r"speed_history\s*=\s*(\{.*?\});", r.text, re.DOTALL)
+        if not match:
+            logger.warning("speed_history block not found in router response.")
+            return {}
+        return demjson3.decode(match.group(1))
+    except Exception as e:
+        logger.error(f"Error fetching speed history: {e}")
+        return {}
+
+def get_dhcp_mapping():
+    """Return dict mapping IP -> (device name, MAC) from DHCP leases"""
+    router = requests.Session()
+    router.auth = ROUTER_AUTH
+    router.verify = False
+
+    url = f"{ROUTER_URL}/update.cgi"
+    data = "exec=devlist&_http_id=TIDe5b1505eeac7f67f"
+    headers = {
+        "Content-Type": "text/plain;charset=UTF-8",
+        "Referer": ROUTER_URL + "/",
+        "Origin": ROUTER_URL
+    }
+    try:
+        r = router.post(url, headers=headers, data=data, timeout=10)
+        match = re.search(r"dhcpd_lease\s*=\s*(\[.*?\]);", r.text, re.DOTALL)
+        if not match:
+            logger.warning("dhcpd_lease block not found in router response.")
+            return {}
+        leases = demjson3.decode(match.group(1))
+        mapping = {}
+        for lease in leases:
+            # lease = [name, ip, mac, lease_time]
+            name, ip, mac = lease[0], lease[1], lease[2]
+            mapping[ip] = (name, mac.upper())
+        return mapping
+    except Exception as e:
+        logger.error(f"Error fetching DHCP mapping: {e}")
+        return {}
+
 # ========= DISCORD BOT SETUP =========
 class MyBot(discord.Client):
     def __init__(self):
@@ -295,7 +387,8 @@ async def mac_autocomplete(interaction: discord.Interaction, current: str):
     choices = [
         app_commands.Choice(name=name, value=mac)
         for mac, name in MACS_LIST.items()
-        if current.lower() in name.lower() or current.lower() in mac.lower()
+        if (current.lower() in name.lower() or current.lower() in mac.lower())
+        and mac not in BANNED_MACS
     ]
     return choices[:25]
 
@@ -318,7 +411,9 @@ def get_banned_list_text():
 @bot.tree.command(name="blk", description="Ban a MAC address from the list")
 @app_commands.autocomplete(mac=mac_autocomplete)
 async def ban(interaction: discord.Interaction, mac: str):
-    logger.info(f"ACTION: /blk | User: {interaction.user} (ID: {interaction.user.id}) | Target: {mac}")
+    logger.info(f"ACTION: /blk | User: {interaction.user} | Target: {mac}")
+    
+    await interaction.response.defer() 
     try:
         router = requests.Session()
         router.auth = ROUTER_AUTH
@@ -326,71 +421,81 @@ async def ban(interaction: discord.Interaction, mac: str):
         mac_upper = mac.upper()
         ban_mac(router, headers, mac_upper)
         
-        current_list = get_banned_list_text()
         device_name = MACS_LIST.get(mac_upper, "Unknown Device")
+        
+        lines = []
+        for i, m in enumerate(BANNED_MACS, 1):
+            name_fixed = MACS_LIST.get(m, 'Unknown')[:12].ljust(12)
+            lines.append(f"{i:02d}. {name_fixed} | {m}")
+        
+        current_list = "\n".join(lines) if lines else "No devices banned"
 
         embed = discord.Embed(
-            title="🚫 Device Blocked",
-            description=f"**Device:** `{device_name}`\n**MAC:** `{mac_upper}`",
-            color=discord.Color.red()
+            title="`🚫` Device Blocked Successfully",
+            description=f"**Target:** `{device_name}`\n**MAC:** `{mac_upper}`",
+            color=0xff4747
         )
         
         embed.add_field(
-            name="📝 Updated Banned List:",
-            value=f"```\n{current_list if current_list else 'No devices banned'}```",
+            name="`📝` Updated Banned List",
+            value=f"```\n{current_list}```",
             inline=False
         )
 
-        await interaction.response.send_message(embed=embed)
-        logger.info(f"SUCCESS: {mac_upper} ({device_name}) blocked by {interaction.user}. Total banned: {len(BANNED_MACS)}")
+        await interaction.followup.send(embed=embed)
+        logger.info(f"SUCCESS: {mac_upper} blocked. Total banned: {len(BANNED_MACS)}")
         
     except Exception as e:
-        logger.error(f"FAILURE: Could not block {mac} for {interaction.user}. Error: {e}")
-        error_embed = discord.Embed(
-            title="❌ Router Error",
-            description="**Status:** `Could not apply block. Check bot.log for details.`",
-            color=discord.Color.dark_red()
-        )
-        await interaction.response.send_message(embed=error_embed, ephemeral=True)
+        logger.error(f"FAILURE: {e}")
+        try:
+            await interaction.followup.send("`❌` Router Error: Connection timed out or failed.")
+        except:
+            pass
 
 # --------- /rm ---------
 @bot.tree.command(name="rm", description="Unban a device from the current banned list")
 @app_commands.autocomplete(mac=banned_macs_autocomplete)
 async def rm(interaction: discord.Interaction, mac: str):
-    logger.info(f"ACTION: /rm | User: {interaction.user} (ID: {interaction.user.id}) | Target MAC: {mac}")
+    logger.info(f"ACTION: /rm | User: {interaction.user} | Target MAC: {mac}")
+    
+    await interaction.response.defer()
     try:
         router = requests.Session()
         router.auth = ROUTER_AUTH
         headers = {"Content-Type": "text/plain;charset=UTF-8", "Referer": ROUTER_URL + "/", "Origin": ROUTER_URL} 
-        mac = mac.upper()
-        unban_mac(router, headers, mac)
+        mac_upper = mac.upper()
         
-        current_list = get_banned_list_text()
-        device_name = MACS_LIST.get(mac, "Unknown Device")
+        unban_mac(router, headers, mac_upper)
+        
+        device_name = MACS_LIST.get(mac_upper, "Unknown Device")
+        lines = []
+        for i, m in enumerate(BANNED_MACS, 1):
+            name_fixed = MACS_LIST.get(m, 'Unknown')[:12].ljust(12)
+            lines.append(f"{i:02d}. {name_fixed} | {m}")
+        
+        current_list = "\n".join(lines) if lines else "No devices currently banned"
 
         embed = discord.Embed(
-            title="✅ Device Unblocked",
-            description=f"**Device:** `{device_name}`\n**MAC:** `{mac}`",
-            color=discord.Color.green()
+            title="`✅` Device Unblocked Successfully",
+            description=f"**Target:** `{device_name}`\n**MAC:** `{mac_upper}`",
+            color=0x2ecc71 
         )
         
         embed.add_field(
-            name="📝 Updated Banned List:",
-            value=f"```\n{current_list if current_list else 'No devices banned'}```",
+            name="`📝` Updated Banned List",
+            value=f"```\n{current_list}```",
             inline=False
         )
 
-        await interaction.response.send_message(embed=embed)
-        logger.info(f"SUCCESS: {mac} has been unblocked by {interaction.user}. New list size: {len(BANNED_MACS)}")
+        await interaction.followup.send(embed=embed)
+        logger.info(f"SUCCESS: {mac_upper} unblocked. New list size: {len(BANNED_MACS)}")
         
     except Exception as e:
-        logger.error(f"FAILURE: Could not unblock {mac} for {interaction.user}. Error: {e}")
-        error_embed = discord.Embed(
-            title="❌ Error",
-            description="**Status:** `Failed to communicate with the router. Check bot.log for details.`",
-            color=discord.Color.red()
-        )
-        await interaction.response.send_message(embed=error_embed, ephemeral=True)
+        logger.error(f"FAILURE: {e}")
+        try:
+            await interaction.followup.send("`❌` Router Error: Failed to remove block.")
+        except:
+            pass
 
 # --------- /macs ---------
 @bot.tree.command(name="macs", description="List known MAC names")
@@ -403,7 +508,7 @@ async def macs(interaction: discord.Interaction):
         embed_color = discord.Color.light_grey()
 
     embed = discord.Embed(
-        title="📋 Known MAC Names List",
+        title="`📋` Known MAC Names List",
         description=msg,
         color=embed_color
     )
@@ -413,126 +518,190 @@ async def macs(interaction: discord.Interaction):
 # --------- /list---------
 @bot.tree.command(name="list", description="List currently banned MACs")
 async def list_banned(interaction: discord.Interaction):
-    logger.info(f"User {interaction.user} (ID: {interaction.user.id}) requested the banned MACs list.")
+    logger.info(f"User {interaction.user} requested the banned MACs list.")
+    
     try:
         if BANNED_MACS:
-            banned_list = "\n".join(
-                f"**{i+1}-** `{m}` ({MACS_LIST.get(m, 'Unknown')})" 
-                for i, m in enumerate(BANNED_MACS)
-            )
+            lines = []
+            for i, m in enumerate(BANNED_MACS, 1):
+                name_fixed = MACS_LIST.get(m, 'Unknown')[:12].ljust(12)
+                lines.append(f"{i:02d}. {name_fixed} | {m}")
+            
+            banned_output = f"```\n" + "\n".join(lines) + "```"
             count = len(BANNED_MACS)
-            embed_color = discord.Color.orange()
+            embed_color = 0xe67e22
         else:
-            banned_list = "*No MACs are currently banned.*"
+            banned_output = "✨ *No devices are currently under lockdown.*"
             count = 0 
-            embed_color = discord.Color.light_grey()
+            embed_color = 0x95a5a6 
 
         embed = discord.Embed(
-            title=f"🚫 Banned MACs List ({count})",
-            description=banned_list,
+            title=f"`🚫` Banned Devices ({count})",
+            description=banned_output,
             color=embed_color
         )
 
+        embed.set_footer(text="Use /rm to unblock a specific device")
         await interaction.response.send_message(embed=embed)
         logger.info(f"Sent banned list ({count} devices) to {interaction.user}.")
         
     except Exception as e:
-        logger.error(f"Error while listing banned MACs for {interaction.user}: {e}")
-        error_embed = discord.Embed(
-            title="❌ Error",
-            description="**Status:** `An unexpected error occurred while fetching the list.`",
-            color=discord.Color.red()
-        )
-        await interaction.response.send_message(embed=error_embed, ephemeral=True)
-# --------- /balance---------
+        logger.error(f"Error while listing banned MACs: {e}")
+        await interaction.response.send_message("`❌` Failed to retrieve the list.", ephemeral=True)
+
+# --------- /balance ---------
 @bot.tree.command(name="balance", description="Check current available traffic")
 async def balance(interaction: discord.Interaction):
     logger.info(f"User {interaction.user} requested balance check.")
-    await interaction.response.defer() 
+    await interaction.response.defer()
     traffic = get_balance()
     
     if traffic:
-        embed = discord.Embed(
-            title="📊 Network Status",
-            description=f"**Balance:** `{traffic}`",
-            color=discord.Color.blue()
+        balance_label = "Current Balance:".ljust(17)
+        limit_label   = "System Limit:".ljust(17)
+        
+        status_box = (
+            f"```\n"
+            f"{balance_label} {traffic}\n"
+            f"{limit_label} {THRESHOLD} GB\n"
+            f"```\n"
+            f"`💡` *Status is updated automatically every hour.*"
         )
+        
+        embed = discord.Embed(
+            title="`📊` Network Status",
+            description=status_box,
+            color=0x3498db
+        )
+    
         await interaction.followup.send(embed=embed)
         logger.info(f"Balance sent to {interaction.user}: {traffic}")
     else:
         embed = discord.Embed(
-            title="❌ System Error",
-            description="**Status:** `Could not fetch balance. The Radius server might be down.`",
-            color=discord.Color.red()
+            title="`❌` System Error",
+            description="`Could not fetch balance. Radius server unreachable.`",
+            color=0xe74c3c
         )
         await interaction.followup.send(embed=embed)
-        logger.error(f"Failed to provide balance to {interaction.user} due to server error.")
 
-# --------- /online ---------
-@bot.tree.command(name="online", description="Show currently active devices")
-async def online(interaction: discord.Interaction):
-    import re
-    logger.info(f"User {interaction.user} requested online devices.")
+# --------- /netstat ---------
+@bot.tree.command(name="netstat", description="Show online devices with aligned status")
+async def netstat(interaction: discord.Interaction):
+    logger.info(f"Full network status requested by {interaction.user}")
     await interaction.response.defer()
     
     try:
         raw_content = get_router_devices_raw()
-        if not raw_content:
-            await interaction.followup.send("⚠️ Router connection failed.")
+        speed_history = get_speed_history()
+        dhcp_mapping = get_dhcp_mapping()
+
+        if not raw_content or not speed_history:
+            await interaction.followup.send("`❌` Failed to fetch data from router.")
             return
 
-        active_devices = []
-        seen_macs = set()
-        
+        active_macs = {}
         device_pattern = r"['\"](([0-9A-Fa-f]{2}[:-]){5}[0-9A-Fa-f]{2})['\"].*?(-\d+)"
         matches = re.finditer(device_pattern, raw_content, re.DOTALL)
 
         for match in matches:
             mac = match.group(1).upper()
             rssi = int(match.group(3))
-            
-            if rssi >= 0 or rssi < -100:
-                continue
+            if -100 < rssi < 0:
+                quality = min(max(2 * (rssi + 100), 0), 100)
+                active_macs[mac] = quality
 
-            if mac not in seen_macs:
-                device_name = MACS_LIST.get(mac, "Unknown Device")
-                active_devices.append({
-                    "name": device_name,
-                    "mac": mac,
-                    "rssi": rssi
+        combined_data = []
+        total_traffic_mb = 0.0
+
+        for ip, data in speed_history.items():
+            if not ip or ip.startswith("_") or ip.endswith(".0"): continue
+            rx_total = data.get("rx_total", 0) if isinstance(data, dict) else data
+            tx_total = data.get("tx_total", 0) if isinstance(data, dict) else 0
+            usage_mb = bytes_to_mb(rx_total + tx_total)
+            total_traffic_mb += usage_mb
+
+            name, mac = dhcp_mapping.get(ip, (ip, "Unknown"))
+            if mac in active_macs:
+                combined_data.append({
+                    "name": MACS_LIST.get(mac, name),
+                    "usage": usage_mb,
+                    "signal": active_macs[mac]
                 })
-                seen_macs.add(mac)
 
-        active_devices.sort(key=lambda x: x['rssi'], reverse=True)
+        combined_data.sort(key=lambda x: x['usage'], reverse=True)
 
-        if active_devices:
+        def fmt_usage(mb: float) -> str:
+            return f"{mb / 1024:.1f}GB" if mb >= 1024 else f"{int(mb)}MB"
+
+        def get_status_icon(usage_mb):
+            if usage_mb >= 2048: return "🔴"
+            if usage_mb >= 500:  return "🟡"
+            return "🟢"
+
+        if combined_data:
             embed = discord.Embed(color=0x2ecc71)
-            
-            count = len(active_devices)
-            header = f"📡 **{count} Active Client{'s' if count > 1 else ''}**\n\n"
+            header = f"`📡` **Network Live Status ({len(combined_data)} Devices)**\n"
             
             lines = []
-            for dev in active_devices:
-                quality = min(max(2 * (dev['rssi'] + 100), 0), 100)
+            for dev in combined_data[:15]:
+                icon = get_status_icon(dev['usage'])
+                u_str = fmt_usage(dev['usage'])
+                sig_str = f"{dev['signal']}%"
                 
-                if quality >= 80: icon = "🟢"
-                elif quality >= 50: icon = "🟡"
-                else: icon = "🔴"
+                name_fixed = dev['name'][:12].ljust(12)
+                sig_fixed = sig_str.rjust(4)
+                usage_fixed = u_str.rjust(6)
 
-                lines.append(f"{icon} **{dev['name']}** — `{quality}%`")
+                lines.append(f"{icon} `{name_fixed} | 📶{sig_fixed} | 📊{usage_fixed}`")
             
-            embed.description = header + "\n".join(lines)
+            embed.description = header + "\n" + "\n".join(lines)
+            embed.set_footer(text=f"Total Network Load: {fmt_usage(total_traffic_mb)}")
         else:
-            embed = discord.Embed(
-                description="✨ No active devices detected.",
-                color=0x95a5a6
-            )
+            embed = discord.Embed(description="✨ No active devices found.", color=0x95a5a6)
 
         await interaction.followup.send(embed=embed)
         
     except Exception as e:
-        logger.error(f"Error in Tomato parsing: {e}")
-        await interaction.followup.send("⚠️ Parsing error.")
+        logger.error(f"Error in netstat: {e}")
+        await interaction.followup.send("`❌` Error compiling network status.")
+
+# --------- /limit ---------
+@bot.tree.command(name="limit", description="Change the traffic threshold (GB)")
+@app_commands.describe(limit="The new threshold value in GB (e.g. 5.0)")
+async def set_limit(interaction: discord.Interaction, limit: float):
+    global THRESHOLD
+    
+    await interaction.response.defer()
+    try:
+        old_limit = THRESHOLD
+        THRESHOLD = limit
+        
+        save_threshold(limit)
+        logger.info(f"User {interaction.user} updated THRESHOLD to {limit}")
+        
+        label_old = "Old Limit:".ljust(14)
+        label_new = "New Limit:".ljust(14)        
+        status_box = (
+            f"```\n"
+            f"{label_old} {old_limit} GB\n"
+            f"{label_new} {THRESHOLD} GB\n"
+            f"```\n"
+            f"`✅` *Settings updated.*"
+        )
+        
+        embed = discord.Embed(
+            title="`⚙️` System Configuration Update",
+            description=status_box,
+            color=0xf1c40f
+        )
+        
+        await interaction.followup.send(embed=embed)
+        
+        await asyncio.to_thread(check_and_lock, bot)
+
+    except Exception as e:
+        logger.error(f"Error in limit command: {e}")
+        await interaction.followup.send("`❌` Failed to update configuration.")
 
 # ========= Manage commands =========
 purge_group = app_commands.Group(name="purge", description="Commands to delete messages")
@@ -587,7 +756,6 @@ if __name__ == "__main__":
     except KeyboardInterrupt:
         logger.warning("KeyboardInterrupt received (Ctrl+C).")
     finally:
-
         if not bot.is_closed():
             asyncio.run(bot.close())
         logger.info("--- Bot has been stopped safely ---")
