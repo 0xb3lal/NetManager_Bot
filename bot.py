@@ -1,27 +1,29 @@
 import os
 import hmac
+import copy
 import hashlib
 import logging
 import asyncio
 import discord
 import requests
-import copy
 from discord.ext import tasks
 from bs4 import BeautifulSoup
+from dotenv import load_dotenv
 from discord import app_commands
 from logging.handlers import RotatingFileHandler
 from requests.exceptions import ReadTimeout, ConnectionError
-
+load_dotenv()
 # ========= CONFIG =========
-D_USERNAME = "01552802883" # Dashboard Username (radiusmanager/user.php)
-D_PASSWORD = "123"         # Dashboard Password (radiusmanager/user.php)
-ROUTER_URL = "http://192.168.1.1:7080"
-ROUTER_AUTH = ("belal", "107003##$$")
+D_USERNAME = os.getenv("D_USERNAME")         # Dashboard Username (radiusmanager/user.php)
+D_PASSWORD = os.getenv("D_PASSWORD")         # Dashboard Password (radiusmanager/user.php)
+ROUTER_URL = os.getenv("ROUTER_URL")
+ROUTER_AUTH = (os.getenv("ROUTER_USER"),
+               os.getenv("ROUTER_PASS"))
 THRESHOLD = 3.0
 BANNED_MACS = set()
-DISCORD_TOKEN = ""
+DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
 GUILD_ID = discord.Object(id=1475047474832867338) 
-CHANNEL_ID = 1475047475680383081
+CHANNEL_ID = os.getenv("CHANNEL_ID")
 ALLOWED_MACS = [
     "4C:20:B8:87:12:E2",
     "F8:34:41:DA:93:EB",
@@ -452,7 +454,7 @@ async def balance(interaction: discord.Interaction):
     if traffic:
         embed = discord.Embed(
             title="📊 Network Status",
-            description=f"**Current Balance:** `{traffic}`",
+            description=f"**Balance:** `{traffic}`",
             color=discord.Color.blue()
         )
         await interaction.followup.send(embed=embed)
