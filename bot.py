@@ -16,7 +16,7 @@ from dotenv import load_dotenv
 from discord import app_commands
 from logging.handlers import RotatingFileHandler
 from requests.exceptions import ReadTimeout, ConnectionError
-urllib3.disable_warnings()
+
 # ========= CONFIG =========
 load_dotenv()
 D_USERNAME = os.getenv("D_USERNAME")         # Dashboard Username (radiusmanager/user.php)
@@ -308,6 +308,7 @@ def get_balance():
     return None
 
 # ========= NETWORK USAGE HELPERS =========
+urllib3.disable_warnings() # Disable SSL/Insecure connection warnings in console
 def bytes_to_mb(value):
     return value / (1024 * 1024)
 
