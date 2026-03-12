@@ -1,6 +1,7 @@
 beautifulsoup4
 python-dotenv
 discord.py
+demjson3
 requests
 colorlog
 logging
