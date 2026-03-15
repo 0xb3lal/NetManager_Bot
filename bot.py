@@ -394,7 +394,7 @@ async def mac_autocomplete(interaction: discord.Interaction, current: str):
 
 async def banned_macs_autocomplete(interaction: discord.Interaction, current: str):
     choices = [
-        app_commands.Choice(name=f"{MACS_LIST.get(mac, 'Unknown')} ({mac})", value=mac)
+        app_commands.Choice(name=MACS_LIST.get(mac, 'Unknown Device'), value=mac)
         for mac in BANNED_MACS
         if current.lower() in mac.lower() or current.lower() in MACS_LIST.get(mac, '').lower()
     ]
@@ -419,26 +419,27 @@ async def ban(interaction: discord.Interaction, mac: str):
         router.auth = ROUTER_AUTH
         headers = {"Content-Type": "text/plain;charset=UTF-8", "Referer": ROUTER_URL + "/", "Origin": ROUTER_URL}
         mac_upper = mac.upper()
+        
         ban_mac(router, headers, mac_upper)
         
         device_name = MACS_LIST.get(mac_upper, "Unknown Device")
         
         lines = []
         for i, m in enumerate(BANNED_MACS, 1):
-            name_fixed = MACS_LIST.get(m, 'Unknown')[:12].ljust(12)
-            lines.append(f"{i:02d}. {name_fixed} | {m}")
+            name = MACS_LIST.get(m, 'Unknown Device')
+            lines.append(f"{i:02d}. {name}")
         
-        current_list = "\n".join(lines) if lines else "No devices banned"
+        current_list = "```\n" + "\n".join(lines) + "```" if lines else "No devices currently banned"
 
         embed = discord.Embed(
-            title="`🚫` Device Blocked Successfully",
-            description=f"**Target:** `{device_name}`\n**MAC:** `{mac_upper}`",
+            title="`🚫` Device Blocked",
+            description=f"**Target:** `{device_name}`",
             color=0xff4747
         )
         
         embed.add_field(
             name="`📝` Updated Banned List",
-            value=f"```\n{current_list}```",
+            value=current_list,
             inline=False
         )
 
@@ -459,6 +460,7 @@ async def rm(interaction: discord.Interaction, mac: str):
     logger.info(f"ACTION: /rm | User: {interaction.user} | Target MAC: {mac}")
     
     await interaction.response.defer()
+    
     try:
         router = requests.Session()
         router.auth = ROUTER_AUTH
@@ -468,22 +470,23 @@ async def rm(interaction: discord.Interaction, mac: str):
         unban_mac(router, headers, mac_upper)
         
         device_name = MACS_LIST.get(mac_upper, "Unknown Device")
+        
         lines = []
         for i, m in enumerate(BANNED_MACS, 1):
-            name_fixed = MACS_LIST.get(m, 'Unknown')[:12].ljust(12)
-            lines.append(f"{i:02d}. {name_fixed} | {m}")
+            name = MACS_LIST.get(m, 'Unknown')
+            lines.append(f"{i:02d}. {name}")
         
-        current_list = "\n".join(lines) if lines else "No devices currently banned"
+        current_list = "```\n" + "\n".join(lines) + "```" if lines else "✨ *No devices currently banned*"
 
         embed = discord.Embed(
-            title="`✅` Device Unblocked Successfully",
-            description=f"**Target:** `{device_name}`\n**MAC:** `{mac_upper}`",
+            title="`✅` Device Unblocked",
+            description=f"**Target:** `{device_name}`",
             color=0x2ecc71 
         )
         
         embed.add_field(
             name="`📝` Updated Banned List",
-            value=f"```\n{current_list}```",
+            value=current_list,
             inline=False
         )
 
@@ -500,54 +503,64 @@ async def rm(interaction: discord.Interaction, mac: str):
 # --------- /macs ---------
 @bot.tree.command(name="macs", description="List known MAC names")
 async def macs(interaction: discord.Interaction):
-    if MACS_LIST:
-        msg = "\n".join(f"`{mac}` : **{name}**" for mac, name in MACS_LIST.items())
-        embed_color = discord.Color.blue()
-    else:
-        msg = "*No MAC addresses found in the list.*"
-        embed_color = discord.Color.light_grey()
+    await interaction.response.defer() 
+    try:
+        if MACS_LIST:
+            msg = "\n".join(f"`{mac}` : **{name}**" for mac, name in MACS_LIST.items())
+            embed_color = discord.Color.blue()
+        else:
+            msg = "*No MAC addresses found in the list.*"
+            embed_color = discord.Color.light_grey()
 
-    embed = discord.Embed(
-        title="`📋` Known MAC Names List",
-        description=msg,
-        color=embed_color
-    )
+        embed = discord.Embed(
+            title="`📋` Known MAC Names List",
+            description=msg,
+            color=embed_color
+        )
 
-    await interaction.response.send_message(embed=embed)
+        await interaction.followup.send(embed=embed)
+        
+    except Exception as e:
+        logger.error(f"Error in /macs command: {e}")
+        await interaction.followup.send("`❌` Failed to retrieve the MACs list.")
 
 # --------- /list---------
 @bot.tree.command(name="list", description="List currently banned MACs")
 async def list_banned(interaction: discord.Interaction):
     logger.info(f"User {interaction.user} requested the banned MACs list.")
+    await interaction.response.defer()
     
     try:
         if BANNED_MACS:
             lines = []
             for i, m in enumerate(BANNED_MACS, 1):
-                name_fixed = MACS_LIST.get(m, 'Unknown')[:12].ljust(12)
-                lines.append(f"{i:02d}. {name_fixed} | {m}")
+                device_name = MACS_LIST.get(m, "Unknown Device")
+                lines.append(f"{i:02d}. {device_name}")
             
-            banned_output = f"```\n" + "\n".join(lines) + "```"
+            banned_output = "```\n" + "\n".join(lines) + "```"
             count = len(BANNED_MACS)
             embed_color = 0xe67e22
         else:
             banned_output = "✨ *No devices are currently under lockdown.*"
             count = 0 
-            embed_color = 0x95a5a6 
+            embed_color = 0x95a5a6
 
         embed = discord.Embed(
-            title=f"`🚫` Banned Devices ({count})",
+            title=f"`🚫` Blockde Devices ({count})",
             description=banned_output,
             color=embed_color
         )
-
+        
         embed.set_footer(text="Use /rm to unblock a specific device")
-        await interaction.response.send_message(embed=embed)
+        await interaction.followup.send(embed=embed)
         logger.info(f"Sent banned list ({count} devices) to {interaction.user}.")
         
     except Exception as e:
         logger.error(f"Error while listing banned MACs: {e}")
-        await interaction.response.send_message("`❌` Failed to retrieve the list.", ephemeral=True)
+        try:
+            await interaction.followup.send("`❌` Failed to retrieve the list.")
+        except:
+            pass
 
 # --------- /balance ---------
 @bot.tree.command(name="balance", description="Check current available traffic")
@@ -704,23 +717,36 @@ async def set_limit(interaction: discord.Interaction, limit: float):
         await interaction.followup.send("`❌` Failed to update configuration.")
 
 # ========= Manage commands =========
-purge_group = app_commands.Group(name="purge", description="Commands to delete messages")
 
+# --------- /purge user ---------
+purge_group = app_commands.Group(name="purge", description="Commands to delete messages")
 @purge_group.command(name="user", description="Delete messages from a specific user")
 @app_commands.describe(user="The user to delete messages for", amount="Number of messages to check")
 async def purge_user(interaction: discord.Interaction, user: discord.Member, amount: int):
     await interaction.response.defer(ephemeral=True)
-    def is_user(m):
-        return m.author == user
-    deleted = await interaction.channel.purge(limit=amount, check=is_user)
-    await interaction.followup.send(f"Deleted {len(deleted)} messages for {user.display_name}", ephemeral=True)
+    try:
+        def is_user(m):
+            return m.author == user
+        
+        deleted = await interaction.channel.purge(limit=amount, check=is_user)
+        
+        await interaction.followup.send(f"`✅` Deleted {len(deleted)} messages for {user.display_name}.", ephemeral=True)
+    except Exception as e:
+        logger.error(f"Error in purge user: {e}")
+        await interaction.followup.send("`❌` Failed to purge messages. Check bot permissions.", ephemeral=True)
 
+# --------- /purge any ---------
 @purge_group.command(name="any", description="Delete any messages in the channel")
 @app_commands.describe(amount="Number of messages to delete")
 async def purge_any(interaction: discord.Interaction, amount: int):
     await interaction.response.defer(ephemeral=True)
-    deleted = await interaction.channel.purge(limit=amount)
-    await interaction.followup.send(f"Deleted {len(deleted)} messages from the channel", ephemeral=True)
+    
+    try:
+        deleted = await interaction.channel.purge(limit=amount)
+        await interaction.followup.send(f"`✅` Deleted {len(deleted)} messages from the channel.", ephemeral=True)
+    except Exception as e:
+        logger.error(f"Error in purge any: {e}")
+        await interaction.followup.send("`❌` Failed to purge messages.", ephemeral=True)
 
 bot.tree.add_command(purge_group)
 
