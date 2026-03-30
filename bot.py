@@ -368,6 +368,29 @@ def get_dhcp_mapping():
         logger.error(f"Error fetching DHCP mapping: {e}")
         return {}
 
+# ========= STATUS OF SERVICES HELPER ========= 
+def check_bot_services():
+    status = {}
+    # 1. CIFS (Samba)
+    try:
+        r = requests.get(f"{ROUTER_URL}/nas-cifs.asp", auth=ROUTER_AUTH, timeout=4)
+        status['cifs'] = "ONLINE" if "Not Mounted" not in r.text else "OFFLINE"
+    except: status['cifs'] = "TIMEOUT"
+
+    # 2. Radius Dashboard
+    try:
+        r = requests.get("http://10.0.0.254/radiusmanager/user.php", timeout=3)
+        status['radius'] = "READY" if r.status_code == 200 else "DOWN"
+    except: status['radius'] = "DOWN"
+
+    # 3. Router Connectivity
+    try:
+        r = requests.get(ROUTER_URL, auth=ROUTER_AUTH, timeout=3)
+        status['link'] = "OK" if r.status_code == 200 else "AUTH_ERR"
+    except: status['link'] = "UNREACHABLE"
+    
+    return status
+
 # ========= DISCORD BOT SETUP =========
 class MyBot(discord.Client):
     def __init__(self):
@@ -598,82 +621,92 @@ async def balance(interaction: discord.Interaction):
         await interaction.followup.send(embed=embed)
 
 # --------- /netstat ---------
-@bot.tree.command(name="netstat", description="Show online devices with aligned status")
+@bot.tree.command(name="netstat", description="Show all recognized devices and their usage")
 async def netstat(interaction: discord.Interaction):
     logger.info(f"Full network status requested by {interaction.user}")
     await interaction.response.defer()
     
     try:
-        raw_content = get_router_devices_raw()
-        speed_history = get_speed_history()
-        dhcp_mapping = get_dhcp_mapping()
 
-        if not raw_content or not speed_history:
-            await interaction.followup.send("`❌` Failed to fetch data from router.")
-            return
+        speed_history = await asyncio.to_thread(get_speed_history)
+        router = requests.Session()
+        router.auth = ROUTER_AUTH
+        router.verify = False
+        url = f"{ROUTER_URL}/update.cgi"
+        data = "exec=devlist&_http_id=TIDe5b1505eeac7f67f"
+        r = await asyncio.to_thread(router.post, url, data=data, timeout=10)
+        dhcp_leases = demjson3.decode(re.search(r"dhcpd_lease\s*=\s*(\[.*?\]);", r.text).group(1))
+        wireless_devs = demjson3.decode(re.search(r"wldev\s*=\s*(\[.*?\]);", r.text).group(1))
 
-        active_macs = {}
-        device_pattern = r"['\"](([0-9A-Fa-f]{2}[:-]){5}[0-9A-Fa-f]{2})['\"].*?(-\d+)"
-        matches = re.finditer(device_pattern, raw_content, re.DOTALL)
+        active_signals = {dev[1].upper(): dev[2] for dev in wireless_devs}
 
-        for match in matches:
-            mac = match.group(1).upper()
-            rssi = int(match.group(3))
-            if -100 < rssi < 0:
-                quality = min(max(2 * (rssi + 100), 0), 100)
-                active_macs[mac] = quality
+        devices_info = {lease[2].upper(): {"name": lease[0], "ip": lease[1]} for lease in dhcp_leases}
 
         combined_data = []
         total_traffic_mb = 0.0
 
         for ip, data in speed_history.items():
             if not ip or ip.startswith("_") or ip.endswith(".0"): continue
-            rx_total = data.get("rx_total", 0) if isinstance(data, dict) else data
-            tx_total = data.get("tx_total", 0) if isinstance(data, dict) else 0
-            usage_mb = bytes_to_mb(rx_total + tx_total)
+            
+            rx = data.get("rx_total", 0) if isinstance(data, dict) else data
+            tx = data.get("tx_total", 0) if isinstance(data, dict) else 0
+            usage_mb = bytes_to_mb(rx + tx)
             total_traffic_mb += usage_mb
 
-            name, mac = dhcp_mapping.get(ip, (ip, "Unknown"))
-            if mac in active_macs:
-                combined_data.append({
-                    "name": MACS_LIST.get(mac, name),
-                    "usage": usage_mb,
-                    "signal": active_macs[mac]
-                })
+            target_mac = None
+            raw_name = "Unknown"
+            
+            for mac, info in devices_info.items():
+                if info['ip'] == ip:
+                    target_mac = mac
+                    raw_name = info['name']
+                    break
+            
+            if not target_mac: continue
 
-        combined_data.sort(key=lambda x: x['usage'], reverse=True)
+            is_online = target_mac in active_signals
+            rssi = active_signals.get(target_mac, None)
+            
+            if is_online and rssi is not None:
+                status_icon = "🟢"
+                quality = min(max(2 * (rssi + 100), 0), 100)
+                sig_str = f"{quality}%"
+            else:
+                status_icon = "🔴"
+                sig_str = "0%"
 
-        def fmt_usage(mb: float) -> str:
-            return f"{mb / 1024:.1f}GB" if mb >= 1024 else f"{int(mb)}MB"
+            combined_data.append({
+                "name": MACS_LIST.get(target_mac, raw_name),
+                "usage": usage_mb,
+                "signal": sig_str,
+                "icon": status_icon,
+                "online_sort": 1 if is_online else 0
+            })
 
-        def get_status_icon(usage_mb):
-            if usage_mb >= 2048: return "🔴"
-            if usage_mb >= 500:  return "🟡"
-            return "🟢"
+        combined_data.sort(key=lambda x: (x['online_sort'], x['usage']), reverse=True)
 
         if combined_data:
-            embed = discord.Embed(color=0x2ecc71)
-            header = f"`📡` **Network Live Status ({len(combined_data)} Devices)**\n"
-            
             lines = []
             for dev in combined_data[:15]:
-                icon = get_status_icon(dev['usage'])
-                u_str = fmt_usage(dev['usage'])
-                sig_str = f"{dev['signal']}%"
+                u_str = f"{dev['usage'] / 1024:.1f}GB" if dev['usage'] >= 1024 else f"{int(dev['usage'])}MB"
                 
-                name_fixed = dev['name'][:12].ljust(12)
-                sig_fixed = sig_str.rjust(4)
-                usage_fixed = u_str.rjust(6)
+                name_f = dev['name'][:12].ljust(12)
+                sig_f = dev['signal'].rjust(4)
+                usage_f = u_str.rjust(6)
 
-                lines.append(f"{icon} `{name_fixed} | 📶{sig_fixed} | 📊{usage_fixed}`")
-            
-            embed.description = header + "\n" + "\n".join(lines)
-            embed.set_footer(text=f"Total Network Load: {fmt_usage(total_traffic_mb)}")
+                lines.append(f"{dev['icon']} `{name_f} | 📶{sig_f} | 📊{usage_f}`")
+
+            embed = discord.Embed(
+                title=f"`📡` Network Status ({len(combined_data)} Devices)",
+                description="\n".join(lines),
+                color=0x2ecc71
+            )
+            embed.set_footer(text=f"Total Network Load: {total_traffic_mb/1024:.2f} GB")
         else:
-            embed = discord.Embed(description="✨ No active devices found.", color=0x95a5a6)
+            embed = discord.Embed(description="✨ No devices found in history.", color=0x95a5a6)
 
         await interaction.followup.send(embed=embed)
-        
+
     except Exception as e:
         logger.error(f"Error in netstat: {e}")
         await interaction.followup.send("`❌` Error compiling network status.")
@@ -749,6 +782,44 @@ async def purge_any(interaction: discord.Interaction, amount: int):
         await interaction.followup.send("`❌` Failed to purge messages.", ephemeral=True)
 
 bot.tree.add_command(purge_group)
+
+# --------- /botstatus ---------
+@bot.tree.command(name="botstatus", description="Check core system services status")
+async def botstatus(interaction: discord.Interaction):
+    await interaction.response.defer()
+    health = await asyncio.to_thread(check_bot_services)
+    def get_status_emoji(status_val):
+        status_val = status_val.upper()
+        if status_val in ["ONLINE", "READY", "OK"]:
+            return "🟢"
+        if status_val in ["OFFLINE", "DOWN", "AUTH_ERR"]:
+            return "🔴"
+        return "⚪" 
+
+
+    all_ok = all(v in ["ONLINE", "READY", "OK"] for v in health.values())
+    embed_color = 0x2ecc71 if all_ok else 0xe74c3c
+    title_icon = "✅" if all_ok else "⚠️"
+
+    cifs_line   = f"{'CIFS Storage':<14} | {health['cifs']:<8} {get_status_emoji(health['cifs'])}"
+    radius_line = f"{'Radius Dash':<14} | {health['radius']:<8} {get_status_emoji(health['radius'])}"
+    link_line   = f"{'Router Link':<14} | {health['link']:<8} {get_status_emoji(health['link'])}"
+
+    status_box = (
+        f"```\n"
+        f"{cifs_line}\n"
+        f"{radius_line}\n"
+        f"{link_line}\n"
+        f"```"
+    )
+
+    embed = discord.Embed(
+        title=f"`{title_icon}` System Health Dashboard",
+        description=status_box,
+        color=embed_color
+    )
+    
+    await interaction.followup.send(embed=embed)
 
 # ========= THREADS =========
 @tasks.loop(hours=1.0)
