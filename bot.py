@@ -121,7 +121,7 @@ def run_cmd(router, headers, cmd):
     except Exception as e:
         logger.error(f"Unexpected error in run_cmd: {e}")
 
-# ========= LOAD THRESHOLD HELPER =========
+# ========= LOAD THRESHOLD & BANNED DEVICES HELPER =========
 def load_threshold():
     try:
         if os.path.exists(CONFIG_FILE):
@@ -137,12 +137,34 @@ def save_threshold(value):
     try:
         with open(CONFIG_FILE, "w") as f:
             f.write(f"THRESHOLD={value}\n")
+            f.write(f"BANNED={','.join(BANNED_MACS)}\n")
             f.write(f"# Last Updated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
     except Exception as e:
         logger.error(f"Error saving config: {e}")
 
-THRESHOLD = load_threshold()
+def load_banned_macs():
+    try:
+        if os.path.exists(CONFIG_FILE):
+            with open(CONFIG_FILE, "r") as f:
+                for line in f:
+                    if line.startswith("BANNED="):
+                        macs = line.split("=")[1].strip()
+                        return set(macs.split(",")) if macs else set()
+    except Exception as e:
+        logger.error(f"Error loading banned macs: {e}")
+    return set()
 
+def save_banned_macs():
+    try:
+        with open(CONFIG_FILE, "w") as f:
+            f.write(f"THRESHOLD={THRESHOLD}\n")
+            f.write(f"BANNED={','.join(BANNED_MACS)}\n")
+            f.write(f"# Last Updated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
+    except Exception as e:
+        logger.error(f"Error saving banned macs: {e}")
+
+THRESHOLD = load_threshold()
+BANNED_MACS = load_banned_macs()
 # ========= ONLINE DEVICES HELPER =========
 def get_router_devices_raw():
     router = requests.Session()
@@ -199,6 +221,7 @@ def ban_mac(router, headers, mac):
     mac = mac.upper()
     if mac not in BANNED_MACS:
         BANNED_MACS.add(mac)
+        save_banned_macs() 
         logger.info(f"Internal: Added {mac} to memory banned set.")
         enable_lockdown(router, headers, force_lock=False)
     else:
@@ -208,6 +231,7 @@ def unban_mac(router, headers, mac):
     mac = mac.upper()
     if mac in BANNED_MACS:
         BANNED_MACS.remove(mac)
+        save_banned_macs() 
         logger.info(f"Internal: Removed {mac} from memory banned set.")
         enable_lockdown(router, headers, force_lock=False)
     else:
@@ -459,6 +483,97 @@ async def daily_network_report():
     except Exception as e:
         logger.error(f"Error in daily_network_report: {e}")
 
+# ========= BlockAll SETUP =========
+class BulkBlockSelect(discord.ui.Select):
+    def __init__(self, options):
+        super().__init__(
+            placeholder="Select devices to block...",
+            min_values=1,
+            max_values=len(options),
+            options=options
+        )
+
+    async def callback(self, interaction: discord.Interaction):
+        await interaction.response.defer()
+        
+        router = requests.Session()
+        router.auth = ROUTER_AUTH
+        headers = {
+            "Content-Type": "text/plain;charset=UTF-8", 
+            "Referer": f"{ROUTER_URL}/", 
+            "Origin": ROUTER_URL
+        }
+        
+        success_list = []
+        for mac in self.values:
+            try:
+                ban_mac(router, headers, mac.upper())
+                success_list.append(MACS_LIST.get(mac.upper(), "Unknown"))
+            except Exception as e:
+                logger.error(f"Error blocking {mac}: {e}")
+
+        lines = [f"{i:02d}. {MACS_LIST.get(m, 'Unknown Device')}" for i, m in enumerate(BANNED_MACS, 1)]
+        current_list = "```\n" + "\n".join(lines) + "```" if lines else "No devices currently banned"
+
+        embed = discord.Embed(
+            title="`🚫` Bulk Block Completed",
+            description=f"**Blocked:** {', '.join(success_list)}",
+            color=0xff4747
+        )
+        embed.add_field(name="`📝` Updated Banned List", value=current_list, inline=False)
+        await interaction.followup.send(embed=embed)
+
+class BulkBlockView(discord.ui.View):
+    def __init__(self, options):
+        super().__init__(timeout=60)
+        self.add_item(BulkBlockSelect(options))
+
+# ========= RemoveAll SETUP =========
+
+class BulkUnblockSelect(discord.ui.Select):
+    def __init__(self, options):
+        super().__init__(
+            placeholder="Select devices to unblock...",
+            min_values=1,
+            max_values=len(options),
+            options=options
+        )
+
+    async def callback(self, interaction: discord.Interaction):
+        await interaction.response.defer()
+        
+        router = requests.Session()
+        router.auth = ROUTER_AUTH
+        headers = {
+            "Content-Type": "text/plain;charset=UTF-8", 
+            "Referer": f"{ROUTER_URL}/", 
+            "Origin": ROUTER_URL
+        }
+        
+        success_list = []
+        for mac in self.values:
+            try:
+                unban_mac(router, headers, mac.upper())
+                success_list.append(MACS_LIST.get(mac.upper(), "Unknown"))
+            except Exception as e:
+                logger.error(f"Error unblocking {mac}: {e}")
+
+        lines = [f"{i:02d}. {MACS_LIST.get(m, 'Unknown Device')}" for i, m in enumerate(BANNED_MACS, 1)]
+        current_list = "```\n" + "\n".join(lines) + "```" if lines else "No devices currently banned"
+
+        embed = discord.Embed(
+            title="`✅` Bulk Unblock Completed",
+            description=f"**Unblocked:** {', '.join(success_list)}",
+            color=0x47ff47
+        )
+        embed.add_field(name="`📝` Remaining Banned List", value=current_list, inline=False)
+        await interaction.followup.send(embed=embed)
+
+class BulkUnblockView(discord.ui.View):
+    def __init__(self, options):
+        super().__init__(timeout=60)
+        self.add_item(BulkUnblockSelect(options))
+
 # ========= DISCORD BOT SETUP =========
 class MyBot(discord.Client):
     def __init__(self):
@@ -596,6 +711,61 @@ async def rm(interaction: discord.Interaction, mac: str):
             await interaction.followup.send("`❌` Router Error: Failed to remove block.")
         except:
             pass
+
+# --------- /blkall ---------
+@bot.tree.command(name="blkall", description="Select multiple saved devices to block")
+async def blkall(interaction: discord.Interaction):
+    logger.info(f"ACTION: /blkall | User: {interaction.user}")
+    await interaction.response.defer(ephemeral=True)
+    
+    try:
+        options = [
+            discord.SelectOption(
+                label=name,
+                value=mac.upper(),
+                description=f"MAC: {mac.upper()}"
+            )
+            for mac, name in MACS_LIST.items()
+            if mac.upper() not in BANNED_MACS
+        ]
+
+        if not options:
+            await interaction.followup.send("`⚠️` All saved devices are already blocked or list is empty.")
+            return
+
+        view = BulkBlockView(options[:25])
+        await interaction.followup.send("Select the saved devices you want to block:", view=view)
+
+    except Exception as e:
+        logger.error(f"FAILURE in blkall: {e}")
+        await interaction.followup.send(f"`❌` Error: {str(e)}")
+
+# --------- /rmall ---------
+@bot.tree.command(name="rmall", description="Select multiple devices to unblock from the banned list")
+async def rmall(interaction: discord.Interaction):
+    logger.info(f"ACTION: /rmall | User: {interaction.user}")
+    await interaction.response.defer(ephemeral=True)
+    
+    try:
+        options = [
+            discord.SelectOption(
+                label=MACS_LIST.get(mac, f"Unknown ({mac})"),
+                value=mac,
+                description=f"MAC: {mac}"
+            )
+            for mac in BANNED_MACS
+        ]
+
+        if not options:
+            await interaction.followup.send("`⚠️` No devices are currently banned.", ephemeral=True)
+            return
+
+        view = BulkUnblockView(options[:25])
+        await interaction.followup.send("Select the devices you want to unblock:", view=view)
+
+    except Exception as e:
+        logger.error(f"FAILURE in rmall: {e}")
+        await interaction.followup.send(f"`❌` Error: {str(e)}")
 
 # --------- /macs ---------
 @bot.tree.command(name="macs", description="List known MAC names")

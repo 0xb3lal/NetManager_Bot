@@ -2,6 +2,7 @@ import os
 import re
 import hmac
 import copy
+import pytz
 import urllib3
 import hashlib
 import logging
@@ -136,11 +137,34 @@ def save_threshold(value):
     try:
         with open(CONFIG_FILE, "w") as f:
             f.write(f"THRESHOLD={value}\n")
+            f.write(f"BANNED={','.join(BANNED_MACS)}\n")
             f.write(f"# Last Updated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
     except Exception as e:
         logger.error(f"Error saving config: {e}")
 
+def load_banned_macs():
+    try:
+        if os.path.exists(CONFIG_FILE):
+            with open(CONFIG_FILE, "r") as f:
+                for line in f:
+                    if line.startswith("BANNED="):
+                        macs = line.split("=")[1].strip()
+                        return set(macs.split(",")) if macs else set()
+    except Exception as e:
+        logger.error(f"Error loading banned macs: {e}")
+    return set()
+
+def save_banned_macs():
+    try:
+        with open(CONFIG_FILE, "w") as f:
+            f.write(f"THRESHOLD={THRESHOLD}\n")
+            f.write(f"BANNED={','.join(BANNED_MACS)}\n")
+            f.write(f"# Last Updated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
+    except Exception as e:
+        logger.error(f"Error saving banned macs: {e}")
+
 THRESHOLD = load_threshold()
+BANNED_MACS = load_banned_macs()
 
 # ========= ONLINE DEVICES HELPER =========
 def get_router_devices_raw():
@@ -198,6 +222,7 @@ def ban_mac(router, headers, mac):
     mac = mac.upper()
     if mac not in BANNED_MACS:
         BANNED_MACS.add(mac)
+        save_banned_macs()  
         logger.info(f"Internal: Added {mac} to memory banned set.")
         enable_lockdown(router, headers, force_lock=False)
     else:
@@ -207,6 +232,7 @@ def unban_mac(router, headers, mac):
     mac = mac.upper()
     if mac in BANNED_MACS:
         BANNED_MACS.remove(mac)
+        save_banned_macs()  
         logger.info(f"Internal: Removed {mac} from memory banned set.")
         enable_lockdown(router, headers, force_lock=False)
     else:
@@ -392,45 +418,68 @@ def check_bot_services():
     return status
 
 # ========= DAILY REPORT HELPER ========= 
-REPORT_TIME = time(hour=23, minute=45)
+cairo_tz = pytz.timezone("Africa/Cairo")
+REPORT_TIME = time(hour=23, minute=45, tzinfo=cairo_tz)
+
 
 @tasks.loop(time=REPORT_TIME)
 async def daily_network_report():
     try:
         speed_history = await asyncio.to_thread(get_speed_history)
-        # Using dhcp_leases extraction logic from your netstat command
         router = requests.Session()
         router.auth = ROUTER_AUTH
         router.verify = False
         url = f"{ROUTER_URL}/update.cgi"
         data = "exec=devlist&_http_id=TIDe5b1505eeac7f67f"
         r = await asyncio.to_thread(router.post, url, data=data, timeout=10)
-        dhcp_leases = demjson3.decode(re.search(r"dhcpd_lease\s*=\s*(\[.*?\]);", r.text).group(1))
-        devices_info = {lease[2].upper(): {"name": lease[0], "ip": lease[1]} for lease in dhcp_leases}
-        
+        dhcp_leases = demjson3.decode(
+            re.search(r"dhcpd_lease\s*=\s*(\[.*?\]);", r.text).group(1)
+        )
+        devices_info = {
+            lease[2].upper(): {"name": lease[0], "ip": lease[1]}
+            for lease in dhcp_leases
+        }
         combined_data = []
         total_day_usage_mb = 0.0
-
         for ip, data in speed_history.items():
-            if not ip or ip.startswith("_") or ip.endswith(".0"): continue
+            if not ip or ip.startswith("_") or ip.endswith(".0"):
+                continue
             rx = data.get("rx_total", 0) if isinstance(data, dict) else data
             tx = data.get("tx_total", 0) if isinstance(data, dict) else 0
             usage_mb = bytes_to_mb(rx + tx)
-            if usage_mb < 0.1: continue
+            if usage_mb < 0.1:
+                continue
             total_day_usage_mb += usage_mb
-
-            target_mac = next((mac for mac, info in devices_info.items() if info['ip'] == ip), None)
-            raw_name = devices_info.get(target_mac, {}).get('name', 'Unknown') if target_mac else "Unknown"
+            target_mac = next(
+                (mac for mac, info in devices_info.items() if info["ip"] == ip),
+                None,
+            )
+            raw_name = (
+                devices_info.get(target_mac, {}).get("name", "Unknown")
+                if target_mac
+                else "Unknown"
+            )
             final_name = MACS_LIST.get(target_mac, raw_name)
             combined_data.append({"name": final_name, "usage": usage_mb})
-
-        combined_data.sort(key=lambda x: x['usage'], reverse=True)
+        combined_data.sort(key=lambda x: x["usage"], reverse=True)
         if combined_data:
             channel = bot.get_channel(CHANNEL_ID)
-            if not channel: return
-            lines = [f"`{dev['name'][:15].ljust(15)} | 📊{(f'{dev['usage']/1024:.1f}GB' if dev['usage']>=1024 else f'{int(dev['usage'])}MB').rjust(8)}`" for dev in combined_data[:15]]
-            embed = discord.Embed(title=f"📅 Daily Usage Report ({datetime.now().strftime('%Y-%m-%d')})", description="\n".join(lines), color=0x3498db, timestamp=datetime.now())
-            embed.set_footer(text=f"Total Network Load: {total_day_usage_mb/1024:.2f} GB")
+            if not channel:
+                return
+            cairo_now = datetime.now(cairo_tz)
+            lines = [
+                f"`{dev['name'][:15].ljust(15)} | 📊{(f'{dev['usage']/1024:.1f}GB' if dev['usage']>=1024 else f'{int(dev['usage'])}MB').rjust(8)}`"
+                for dev in combined_data[:15]
+            ]
+            embed = discord.Embed(
+                title=f"📅 Daily Usage Report ({cairo_now.strftime('%Y-%m-%d')})",
+                description="\n".join(lines),
+                color=0x3498db,
+                timestamp=cairo_now,
+            )
+            embed.set_footer(
+                text=f"Total Network Load: {total_day_usage_mb/1024:.2f} GB"
+            )
             await channel.send(embed=embed)
     except Exception as e:
         logger.error(f"Error in daily_network_report: {e}")
