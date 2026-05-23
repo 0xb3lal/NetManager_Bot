@@ -117,9 +117,9 @@ def run_cmd(router, headers, cmd):
         else:
             logger.error(f"Router returned error code {response.status_code} for command: {cmd}")    
     except (ReadTimeout, ConnectionError) as e:
-        logger.error(f"Router Connection Error while executing '{cmd}': {e}")
+        logger.error(f"Router Connection Error while executing '{cmd}': {type(e).__name__} - {e}")
     except Exception as e:
-        logger.error(f"Unexpected error in run_cmd: {e}")
+        logger.error(f"Unexpected error in run_cmd: {type(e).__name__} - {e}")
 
 # ========= LOAD THRESHOLD HELPER =========
 def load_threshold():
@@ -130,7 +130,7 @@ def load_threshold():
                     if line.startswith("THRESHOLD="):
                         return float(line.split("=")[1].strip())
     except Exception as e:
-        logger.error(f"Error loading config: {e}")
+        logger.error(f"Error loading config: {type(e).__name__} - {e}")
     return 3.0  
 
 def save_threshold(value):
@@ -139,7 +139,7 @@ def save_threshold(value):
             f.write(f"THRESHOLD={value}\n")
             f.write(f"# Last Updated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
     except Exception as e:
-        logger.error(f"Error saving config: {e}")
+        logger.error(f"Error saving config: {type(e).__name__} - {e}")
 
 THRESHOLD = load_threshold()
 
@@ -160,7 +160,7 @@ def get_router_devices_raw():
             return response.text
         return ""
     except Exception as e:
-        logger.error(f"Error fetching router devices page: {e}")
+        logger.error(f"Error fetching router devices page: {type(e).__name__} - {e}")
         return ""
 
 # ========= LOCKDOWN LOGIC =========
@@ -271,7 +271,7 @@ def check_and_lock(bot_instance):
             bot_instance.loop.create_task(safe_send())
                 
     except Exception as e:
-        logger.error(f"Main Check Error: {e}")
+        logger.error(f"Main Check Error: {type(e).__name__} - {e}")
 
 
 # ========= Get Balance Only =========
@@ -304,7 +304,7 @@ def get_balance():
     except requests.exceptions.ConnectionError:
         logger.error("Connection Error: Could not connect to 10.0.0.254. Is the server down?")
     except Exception as e:
-        logger.error(f"Unexpected error in get_balance: {e}")
+        logger.error(f"Unexpected error in get_balance: {type(e).__name__} - {e}")
     
     return None
 
@@ -337,7 +337,7 @@ def get_speed_history():
             return {}
         return demjson3.decode(match.group(1))
     except Exception as e:
-        logger.error(f"Error fetching speed history: {e}")
+        logger.error(f"Error fetching speed history: {type(e).__name__} - {e}")
         return {}
 
 def get_dhcp_mapping():
@@ -367,7 +367,7 @@ def get_dhcp_mapping():
             mapping[ip] = (name, mac.upper())
         return mapping
     except Exception as e:
-        logger.error(f"Error fetching DHCP mapping: {e}")
+        logger.error(f"Error fetching DHCP mapping: {type(e).__name__} - {e}")
         return {}
 
 # ========= STATUS OF SERVICES HELPER ========= 
@@ -434,7 +434,7 @@ async def daily_network_report():
             embed.set_footer(text=f"Total Network Load: {total_day_usage_mb/1024:.2f} GB")
             await channel.send(embed=embed)
     except Exception as e:
-        logger.error(f"Error in daily_network_report: {e}")
+        logger.error(f"Error in daily_network_report: {type(e).__name__} - {e}")
 
 # ========= BlockAll SETUP =========
 class BulkBlockSelect(discord.ui.Select):
@@ -464,7 +464,7 @@ class BulkBlockSelect(discord.ui.Select):
                 device_name = MACS_LIST.get(mac.upper(), "Unknown")
                 success_list.append(device_name)
             except Exception as e:
-                logger.error(f"Error blocking {mac}: {e}")
+                logger.error(f"Error blocking {mac}: {type(e).__name__} - {e}")
 
         lines = []
         for i, m in enumerate(BANNED_MACS, 1):
@@ -516,7 +516,7 @@ class BulkUnblockSelect(discord.ui.Select):
                 device_name = MACS_LIST.get(mac.upper(), "Unknown")
                 success_list.append(device_name)
             except Exception as e:
-                logger.error(f"Error unblocking {mac}: {e}")
+                logger.error(f"Error unblocking {mac}: {type(e).__name__} - {e}")
 
         lines = []
         for i, m in enumerate(BANNED_MACS, 1):
@@ -625,7 +625,7 @@ async def ban(interaction: discord.Interaction, mac: str):
         logger.info(f"SUCCESS: {mac_upper} blocked. Total banned: {len(BANNED_MACS)}")
         
     except Exception as e:
-        logger.error(f"FAILURE: {e}")
+        logger.error(f"FAILURE: {type(e).__name__} - {e}")
         try:
             await interaction.followup.send("`❌` Router Error: Connection timed out or failed.")
         except:
@@ -672,7 +672,7 @@ async def rm(interaction: discord.Interaction, mac: str):
         logger.info(f"SUCCESS: {mac_upper} unblocked. New list size: {len(BANNED_MACS)}")
         
     except Exception as e:
-        logger.error(f"FAILURE: {e}")
+        logger.error(f"FAILURE: {type(e).__name__} - {e}")
         try:
             await interaction.followup.send("`❌` Router Error: Failed to remove block.")
         except:
@@ -707,7 +707,7 @@ async def blkall(interaction: discord.Interaction):
         await interaction.followup.send("Select the saved devices you want to block:", view=view)
 
     except Exception as e:
-        logger.error(f"FAILURE in blkall: {e}")
+        logger.error(f"FAILURE in blkall: {type(e).__name__} - {e}")
         await interaction.followup.send(f"`❌` Error: {str(e)}")
 
 # --------- /rmall ---------
@@ -737,7 +737,7 @@ async def rmall(interaction: discord.Interaction):
         await interaction.followup.send("Select the devices you want to unblock:", view=view)
 
     except Exception as e:
-        logger.error(f"FAILURE in rmall: {e}")
+        logger.error(f"FAILURE in rmall: {type(e).__name__} - {e}")
         await interaction.followup.send(f"`❌` Error: {str(e)}")
 
 # --------- /macs ---------
@@ -761,7 +761,7 @@ async def macs(interaction: discord.Interaction):
         await interaction.followup.send(embed=embed)
         
     except Exception as e:
-        logger.error(f"Error in /macs command: {e}")
+        logger.error(f"Error in /macs command: {type(e).__name__} - {e}")
         await interaction.followup.send("`❌` Failed to retrieve the MACs list.")
 
 # --------- /list---------
@@ -796,7 +796,7 @@ async def list_banned(interaction: discord.Interaction):
         logger.info(f"Sent banned list ({count} devices) to {interaction.user}.")
         
     except Exception as e:
-        logger.error(f"Error while listing banned MACs: {e}")
+        logger.error(f"Error while listing banned MACs: {type(e).__name__} - {e}")
         try:
             await interaction.followup.send("`❌` Failed to retrieve the list.")
         except:
@@ -925,7 +925,7 @@ async def netstat(interaction: discord.Interaction):
         await interaction.followup.send(embed=embed)
 
     except Exception as e:
-        logger.error(f"Error in netstat: {e}")
+        logger.error(f"Error in netstat: {type(e).__name__} - {e}")
         await interaction.followup.send("`❌` Error compiling network status.")
 
 # --------- /limit ---------
@@ -963,7 +963,7 @@ async def set_limit(interaction: discord.Interaction, limit: float):
         await asyncio.to_thread(check_and_lock, bot)
 
     except Exception as e:
-        logger.error(f"Error in limit command: {e}")
+        logger.error(f"Error in limit command: {type(e).__name__} - {e}")
         await interaction.followup.send("`❌` Failed to update configuration.")
 
 # ========= Manage commands =========
@@ -982,7 +982,7 @@ async def purge_user(interaction: discord.Interaction, user: discord.Member, amo
         
         await interaction.followup.send(f"`✅` Deleted {len(deleted)} messages for {user.display_name}.", ephemeral=True)
     except Exception as e:
-        logger.error(f"Error in purge user: {e}")
+        logger.error(f"Error in purge user: {type(e).__name__} - {e}")
         await interaction.followup.send("`❌` Failed to purge messages. Check bot permissions.", ephemeral=True)
 
 # --------- /purge any ---------
@@ -995,7 +995,7 @@ async def purge_any(interaction: discord.Interaction, amount: int):
         deleted = await interaction.channel.purge(limit=amount)
         await interaction.followup.send(f"`✅` Deleted {len(deleted)} messages from the channel.", ephemeral=True)
     except Exception as e:
-        logger.error(f"Error in purge any: {e}")
+        logger.error(f"Error in purge any: {type(e).__name__} - {e}")
         await interaction.followup.send("`❌` Failed to purge messages.", ephemeral=True)
 
 bot.tree.add_command(purge_group)
@@ -1046,7 +1046,7 @@ async def traffic_check_task():
         check_and_lock(bot)
         logger.info("Scheduled traffic check completed successfully.")
     except Exception as e:
-        logger.exception(f"Unexpected error during traffic check task: {e}")
+        logger.exception(f"Unexpected error during traffic check task: {type(e).__name__} - {e}")
 
 @traffic_check_task.before_loop
 async def before_traffic_check():
@@ -1061,7 +1061,7 @@ async def main():
     except asyncio.CancelledError:
         logger.warning("Main coroutine cancelled.")
     except Exception as e:
-        logger.error(f"Fatal error in main loop: {e}")
+        logger.error(f"Fatal error in main loop: {type(e).__name__} - {e}")
 
 if __name__ == "__main__":
     logger.info("--- Starting NetManager Bot ---")

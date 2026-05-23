@@ -4,6 +4,7 @@ discord.py
 demjson3
 requests
 colorlog
+zoneinfo
 logging
 pynacl
 davey
