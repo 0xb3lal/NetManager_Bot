@@ -1,0 +1,24 @@
+# Python cache and compiled files
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Virtual environments
+venv/
+.venv/
+
+# Logs (keep container logs volume instead)
+logs/
+
+# Git and tooling
+.git/
+.gitignore
+.vscode/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# dotenv files (optional: keep out of image)
+.env
