@@ -825,11 +825,16 @@ async def balance(interaction: discord.Interaction):
     try:
         await interaction.response.defer()
     except Exception as e:
-        logger.error(f"Failed to defer netstat immediately: {e}")
-        
-    logger.info(f"ACTION: /netstat | User: {interaction.user}")
+        logger.error(f"Failed to defer balance immediately: {e}")
+        return 
+    
+    logger.info(f"ACTION: /balance | User: {interaction.user}")
 
-    traffic = get_balance()
+    try:
+        traffic = await asyncio.to_thread(get_balance)
+    except Exception as e:
+        logger.error(f"Error inside get_balance thread: {e}")
+        traffic = None
     
     if traffic:
         balance_label = "Current Balance:".ljust(17)
@@ -858,7 +863,7 @@ async def balance(interaction: discord.Interaction):
             color=0xe74c3c
         )
         await interaction.followup.send(embed=embed)
-
+        
 # --------- /netstat ---------
 @bot.tree.command(name="netstat", description="Show all recognized devices and their usage")
 async def netstat(interaction: discord.Interaction):
@@ -1035,7 +1040,7 @@ async def botstatus(interaction: discord.Interaction):
         logger.error(f"Failed to defer netstat immediately: {e}")
         
     logger.info(f"ACTION: /netstat | User: {interaction.user}")
-    
+
     health = await asyncio.to_thread(check_bot_services)
     def get_status_emoji(status_val):
         status_val = status_val.upper()
