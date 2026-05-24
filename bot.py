@@ -42,7 +42,7 @@ MACS_LIST = {
     "22:9F:AE:3B:5D:C4": "Mama",
     "4C:20:B8:87:12:E2": "Me/Iphone",
     "F2:72:C9:B8:4B:C7": "Tablet",
-    "DC:53:60:73:FD:84": "Fedora",
+    "32:ac:87:47:17:5d": "Fedora",
     "D6:62:9E:2B:31:3D": "Yousef"
 }
 # ========= LOGING SYS =========
