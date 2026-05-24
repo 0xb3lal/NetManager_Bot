@@ -434,7 +434,22 @@ async def daily_network_report():
     except Exception as e:
         logger.error(f"Error in daily_network_report: {type(e).__name__} - {e}")
 
-# Helper wrapper for bulk tasks
+# ========= Compile big data in backgraound =========
+def compile_netstat_data():
+    speed_history = get_speed_history()
+    
+    router = requests.Session()
+    router.auth = ROUTER_AUTH
+    router.verify = False
+    url = f"{ROUTER_URL}/update.cgi"
+    
+    r = router.post(url, data="exec=devlist&_http_id=TIDe5b1505eeac7f67f", timeout=30)
+    dhcp_leases = demjson3.decode(re.search(r"dhcpd_lease\s*=\s*(\[.*?\]);", r.text).group(1))
+    wireless_devs = demjson3.decode(re.search(r"wldev\s*=\s*(\[.*?\]);", r.text).group(1))
+    
+    return speed_history, dhcp_leases, wireless_devs
+
+# ========= Helper wrapper for bulk tasks =========
 def run_bulk_ban(macs):
     router = requests.Session()
     router.auth = ROUTER_AUTH
@@ -545,7 +560,6 @@ class BulkUnblockView(discord.ui.View):
     def __init__(self, options):
         super().__init__(timeout=60)
         self.add_item(BulkUnblockSelect(options))
-
 
 # ========= DISCORD BOT SETUP =========
 class MyBot(discord.Client):
@@ -881,15 +895,7 @@ async def netstat(interaction: discord.Interaction):
     logger.info(f"ACTION: /netstat | User: {interaction.user}")
     
     try:
-        speed_history = await asyncio.to_thread(get_speed_history)
-        router = requests.Session()
-        router.auth = ROUTER_AUTH
-        router.verify = False
-        url = f"{ROUTER_URL}/update.cgi"
-        data = "exec=devlist&_http_id=TIDe5b1505eeac7f67f"
-        r = await asyncio.to_thread(router.post, url, data=data, timeout=30)
-        dhcp_leases = demjson3.decode(re.search(r"dhcpd_lease\s*=\s*(\[.*?\]);", r.text).group(1))
-        wireless_devs = demjson3.decode(re.search(r"wldev\s*=\s*(\[.*?\]);", r.text).group(1))
+        speed_history, dhcp_leases, wireless_devs = await asyncio.to_thread(compile_netstat_data)
 
         active_signals = {dev[1].upper(): dev[2] for dev in wireless_devs}
         devices_info = {lease[2].upper(): {"name": lease[0], "ip": lease[1]} for lease in dhcp_leases}
@@ -958,7 +964,10 @@ async def netstat(interaction: discord.Interaction):
 
     except Exception as e:
         logger.error(f"Error in netstat: {type(e).__name__} - {e}")
-        await interaction.followup.send("`❌` Error compiling network status.")
+        try:
+            await interaction.followup.send("`❌` Error compiling network status.")
+        except:
+            pass
 
 # --------- /limit ---------
 @bot.tree.command(name="limit", description="Change the traffic threshold (GB)")
@@ -1003,16 +1012,12 @@ async def set_limit(interaction: discord.Interaction, limit: float):
         await interaction.followup.send("`❌` Failed to update configuration.")
 
 # ========= Manage commands =========
-
-# ========= Manage commands =========
-
 purge_group = app_commands.Group(name="purge", description="Commands to delete messages")
 
 # --------- /purge user ---------
 @purge_group.command(name="user", description="Delete messages from a specific user")
 @app_commands.describe(user="The user to delete messages for", amount="Number of messages to check")
 async def purge_user(interaction: discord.Interaction, user: discord.Member, amount: int):
-    # حجز الوقت بشكل مرن، لو فشل مش هنقفل الدالة عشان يكمل مسح عادي
     try:
         await interaction.response.defer(ephemeral=True)
     except Exception as e:
@@ -1025,7 +1030,6 @@ async def purge_user(interaction: discord.Interaction, user: discord.Member, amo
             return m.author == user
         deleted = await interaction.channel.purge(limit=amount, check=is_user)
         
-        # بنستخدم الـ followup بحذر، لو الـ interaction ماتت هنبعت رسالة عادية أو نكتفي بالمسح
         try:
             await interaction.followup.send(f"`✅` Deleted {len(deleted)} messages for {user.display_name}.", ephemeral=True)
         except:
