@@ -589,9 +589,13 @@ def get_banned_list_text():
 @bot.tree.command(name="blk", description="Ban a MAC address from the list")
 @app_commands.autocomplete(mac=mac_autocomplete)
 async def ban(interaction: discord.Interaction, mac: str):
-    logger.info(f"ACTION: /blk | User: {interaction.user} | Target: {mac}")
-    
-    await interaction.response.defer() 
+    try:
+        await interaction.response.defer()
+    except Exception as e:
+        logger.error(f"Failed to defer netstat immediately: {e}")
+        
+    logger.info(f"ACTION: /netstat | User: {interaction.user}")
+
     try:
         router = requests.Session()
         router.auth = ROUTER_AUTH
@@ -635,9 +639,12 @@ async def ban(interaction: discord.Interaction, mac: str):
 @bot.tree.command(name="rm", description="Unban a device from the current banned list")
 @app_commands.autocomplete(mac=banned_macs_autocomplete)
 async def rm(interaction: discord.Interaction, mac: str):
-    logger.info(f"ACTION: /rm | User: {interaction.user} | Target MAC: {mac}")
-    
-    await interaction.response.defer()
+    try:
+        await interaction.response.defer()
+    except Exception as e:
+        logger.error(f"Failed to defer netstat immediately: {e}")
+        
+    logger.info(f"ACTION: /netstat | User: {interaction.user}")
     
     try:
         router = requests.Session()
@@ -743,7 +750,13 @@ async def rmall(interaction: discord.Interaction):
 # --------- /macs ---------
 @bot.tree.command(name="macs", description="List known MAC names")
 async def macs(interaction: discord.Interaction):
-    await interaction.response.defer() 
+    try:
+        await interaction.response.defer()
+    except Exception as e:
+        logger.error(f"Failed to defer netstat immediately: {e}")
+        
+    logger.info(f"ACTION: /netstat | User: {interaction.user}")
+
     try:
         if MACS_LIST:
             msg = "\n".join(f"`{mac}` : **{name}**" for mac, name in MACS_LIST.items())
@@ -767,8 +780,12 @@ async def macs(interaction: discord.Interaction):
 # --------- /list---------
 @bot.tree.command(name="list", description="List currently banned MACs")
 async def list_banned(interaction: discord.Interaction):
-    logger.info(f"User {interaction.user} requested the banned MACs list.")
-    await interaction.response.defer()
+    try:
+        await interaction.response.defer()
+    except Exception as e:
+        logger.error(f"Failed to defer netstat immediately: {e}")
+        
+    logger.info(f"ACTION: /netstat | User: {interaction.user}")
     
     try:
         if BANNED_MACS:
@@ -805,8 +822,13 @@ async def list_banned(interaction: discord.Interaction):
 # --------- /balance ---------
 @bot.tree.command(name="balance", description="Check current available traffic")
 async def balance(interaction: discord.Interaction):
-    logger.info(f"User {interaction.user} requested balance check.")
-    await interaction.response.defer()
+    try:
+        await interaction.response.defer()
+    except Exception as e:
+        logger.error(f"Failed to defer netstat immediately: {e}")
+        
+    logger.info(f"ACTION: /netstat | User: {interaction.user}")
+
     traffic = get_balance()
     
     if traffic:
@@ -840,8 +862,12 @@ async def balance(interaction: discord.Interaction):
 # --------- /netstat ---------
 @bot.tree.command(name="netstat", description="Show all recognized devices and their usage")
 async def netstat(interaction: discord.Interaction):
-    logger.info(f"Full network status requested by {interaction.user}")
-    await interaction.response.defer()
+    try:
+        await interaction.response.defer()
+    except Exception as e:
+        logger.error(f"Failed to defer netstat immediately: {e}")
+        
+    logger.info(f"ACTION: /netstat | User: {interaction.user}")
     
     try:
 
@@ -1003,7 +1029,13 @@ bot.tree.add_command(purge_group)
 # --------- /botstatus ---------
 @bot.tree.command(name="botstatus", description="Check core system services status")
 async def botstatus(interaction: discord.Interaction):
-    await interaction.response.defer()
+    try:
+        await interaction.response.defer()
+    except Exception as e:
+        logger.error(f"Failed to defer netstat immediately: {e}")
+        
+    logger.info(f"ACTION: /netstat | User: {interaction.user}")
+    
     health = await asyncio.to_thread(check_bot_services)
     def get_status_emoji(status_val):
         status_val = status_val.upper()
