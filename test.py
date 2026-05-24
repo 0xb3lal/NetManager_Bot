@@ -110,7 +110,7 @@ def run_cmd(router, headers, cmd):
             f"{ROUTER_URL}/shell.cgi",
             headers=headers,
             data=data,
-            timeout=10
+            timeout=30
         )
         if response.status_code == 200:
             logger.debug(f"Router executed: {cmd} successfully.")
@@ -155,7 +155,7 @@ def get_router_devices_raw():
             "Accept": "text/html,application/xhtml+xml,xml;q=0.9,*/*;q=0.8"
         }
         
-        response = router.get(url, headers=headers, timeout=10)
+        response = router.get(url, headers=headers, timeout=30)
         if response.status_code == 200:
             return response.text
         return ""
@@ -220,9 +220,9 @@ def check_and_lock(bot_instance):
     payload = {"username": D_USERNAME, "md5": md5_final, "Submit": "Submit"}
 
     try:
-        session.post("http://10.0.0.254/radiusmanager/user.php?cont=login", data=payload, timeout=10)
-        session.get("http://10.0.0.254/radiusmanager/user.php?cont=change_lang&lang=English", timeout=10)
-        dash = session.get("http://10.0.0.254/radiusmanager/user.php", timeout=10)
+        session.post("http://10.0.0.254/radiusmanager/user.php?cont=login", data=payload, timeout=30)
+        session.get("http://10.0.0.254/radiusmanager/user.php?cont=change_lang&lang=English", timeout=30)
+        dash = session.get("http://10.0.0.254/radiusmanager/user.php", timeout=30)
         soup = BeautifulSoup(dash.text, "html.parser")
 
         available_traffic = None
@@ -283,10 +283,10 @@ def get_balance():
     
     try:
         login_url = "http://10.0.0.254/radiusmanager/user.php?cont=login"
-        response = session.post(login_url, data=payload, timeout=10)
+        response = session.post(login_url, data=payload, timeout=30)
         response.raise_for_status()
-        session.get("http://10.0.0.254/radiusmanager/user.php?cont=change_lang&lang=English", timeout=10)
-        dash = session.get("http://10.0.0.254/radiusmanager/user.php", timeout=10)
+        session.get("http://10.0.0.254/radiusmanager/user.php?cont=change_lang&lang=English", timeout=30)
+        dash = session.get("http://10.0.0.254/radiusmanager/user.php", timeout=30)
         dash.raise_for_status()
         soup = BeautifulSoup(dash.text, "html.parser")
 
@@ -330,7 +330,7 @@ def get_speed_history():
         "tomato_ipt_refresh": "1"
     }
     try:
-        r = router.post(url, headers=headers, cookies=cookies, data=data, timeout=10)
+        r = router.post(url, headers=headers, cookies=cookies, data=data, timeout=30)
         match = re.search(r"speed_history\s*=\s*(\{.*?\});", r.text, re.DOTALL)
         if not match:
             logger.warning("speed_history block not found in router response.")
@@ -354,7 +354,7 @@ def get_dhcp_mapping():
         "Origin": ROUTER_URL
     }
     try:
-        r = router.post(url, headers=headers, data=data, timeout=10)
+        r = router.post(url, headers=headers, data=data, timeout=30)
         match = re.search(r"dhcpd_lease\s*=\s*(\[.*?\]);", r.text, re.DOTALL)
         if not match:
             logger.warning("dhcpd_lease block not found in router response.")
@@ -375,19 +375,19 @@ def check_bot_services():
     status = {}
     # 1. CIFS (Samba)
     try:
-        r = requests.get(f"{ROUTER_URL}/nas-cifs.asp", auth=ROUTER_AUTH, timeout=4)
+        r = requests.get(f"{ROUTER_URL}/nas-cifs.asp", auth=ROUTER_AUTH, timeout=5)
         status['cifs'] = "ONLINE" if "Not Mounted" not in r.text else "OFFLINE"
     except: status['cifs'] = "TIMEOUT"
 
     # 2. Radius Dashboard
     try:
-        r = requests.get("http://10.0.0.254/radiusmanager/user.php", timeout=3)
+        r = requests.get("http://10.0.0.254/radiusmanager/user.php", timeout=5)
         status['radius'] = "READY" if r.status_code == 200 else "DOWN"
     except: status['radius'] = "DOWN"
 
     # 3. Router Connectivity
     try:
-        r = requests.get(ROUTER_URL, auth=ROUTER_AUTH, timeout=3)
+        r = requests.get(ROUTER_URL, auth=ROUTER_AUTH, timeout=5)
         status['link'] = "OK" if r.status_code == 200 else "AUTH_ERR"
     except: status['link'] = "UNREACHABLE"
     
@@ -405,7 +405,7 @@ async def daily_network_report():
         router.verify = False
         url = f"{ROUTER_URL}/update.cgi"
         data = "exec=devlist&_http_id=TIDe5b1505eeac7f67f"
-        r = await asyncio.to_thread(router.post, url, data=data, timeout=10)
+        r = await asyncio.to_thread(router.post, url, data=data, timeout=30)
         dhcp_leases = demjson3.decode(re.search(r"dhcpd_lease\s*=\s*(\[.*?\]);", r.text).group(1))
         devices_info = {lease[2].upper(): {"name": lease[0], "ip": lease[1]} for lease in dhcp_leases}
         
@@ -681,9 +681,12 @@ async def rm(interaction: discord.Interaction, mac: str):
 # --------- /blkall ---------
 @bot.tree.command(name="blkall", description="Select multiple saved devices to block")
 async def blkall(interaction: discord.Interaction):
+    try:
+        await interaction.response.defer(ephemeral=True)
+    except Exception as e:
+        logger.error(f"Failed to defer immediately: {e}")
+        
     logger.info(f"ACTION: /blkall | User: {interaction.user}")
-    
-    await interaction.response.defer(ephemeral=True)
     
     try:
         options = []
@@ -713,9 +716,12 @@ async def blkall(interaction: discord.Interaction):
 # --------- /rmall ---------
 @bot.tree.command(name="rmall", description="Select multiple devices to unblock from the banned list")
 async def rmall(interaction: discord.Interaction):
-    logger.info(f"ACTION: /rmall | User: {interaction.user}")
-    
-    await interaction.response.defer(ephemeral=True)
+    try:
+        await interaction.response.defer(ephemeral=True)
+    except Exception as e:
+        logger.error(f"Failed to defer immediately: {e}")
+        
+    logger.info(f"ACTION: /blkall | User: {interaction.user}")
     
     try:
         options = []
@@ -851,7 +857,7 @@ async def netstat(interaction: discord.Interaction):
         router.verify = False
         url = f"{ROUTER_URL}/update.cgi"
         data = "exec=devlist&_http_id=TIDe5b1505eeac7f67f"
-        r = await asyncio.to_thread(router.post, url, data=data, timeout=10)
+        r = await asyncio.to_thread(router.post, url, data=data, timeout=30)
         dhcp_leases = demjson3.decode(re.search(r"dhcpd_lease\s*=\s*(\[.*?\]);", r.text).group(1))
         wireless_devs = demjson3.decode(re.search(r"wldev\s*=\s*(\[.*?\]);", r.text).group(1))
 

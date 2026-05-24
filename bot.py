@@ -683,7 +683,7 @@ async def rm(interaction: discord.Interaction, mac: str):
 async def blkall(interaction: discord.Interaction):
     logger.info(f"ACTION: /blkall | User: {interaction.user}")
     
-    await interaction.response.defer(ephemeral=True)
+    await interaction.resonse.defer(ephemeral=True)
     
     try:
         options = []
