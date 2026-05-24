@@ -433,7 +433,7 @@ async def daily_network_report():
             await channel.send(embed=embed)
     except Exception as e:
         logger.error(f"Error in daily_network_report: {type(e).__name__} - {e}")
-        
+
 # Helper wrapper for bulk tasks
 def run_bulk_ban(macs):
     router = requests.Session()
@@ -1004,32 +1004,65 @@ async def set_limit(interaction: discord.Interaction, limit: float):
 
 # ========= Manage commands =========
 
-# --------- /purge user ---------
+# ========= Manage commands =========
+
 purge_group = app_commands.Group(name="purge", description="Commands to delete messages")
+
+# --------- /purge user ---------
 @purge_group.command(name="user", description="Delete messages from a specific user")
 @app_commands.describe(user="The user to delete messages for", amount="Number of messages to check")
 async def purge_user(interaction: discord.Interaction, user: discord.Member, amount: int):
-    await interaction.response.defer(ephemeral=True)
+    # حجز الوقت بشكل مرن، لو فشل مش هنقفل الدالة عشان يكمل مسح عادي
+    try:
+        await interaction.response.defer(ephemeral=True)
+    except Exception as e:
+        logger.warning(f"Purge user defer failed (ignoring): {e}")
+
+    logger.info(f"ACTION: /purge user | Target: {user} | Amount: {amount} | User: {interaction.user}")
+    
     try:
         def is_user(m):
             return m.author == user
         deleted = await interaction.channel.purge(limit=amount, check=is_user)
-        await interaction.followup.send(f"`✅` Deleted {len(deleted)} messages for {user.display_name}.", ephemeral=True)
+        
+        # بنستخدم الـ followup بحذر، لو الـ interaction ماتت هنبعت رسالة عادية أو نكتفي بالمسح
+        try:
+            await interaction.followup.send(f"`✅` Deleted {len(deleted)} messages for {user.display_name}.", ephemeral=True)
+        except:
+            logger.warning("Could not send followup for purge user (interaction expired), but messages were deleted.")
+            
     except Exception as e:
         logger.error(f"Error in purge user: {type(e).__name__} - {e}")
-        await interaction.followup.send("`❌` Failed to purge messages. Check bot permissions.", ephemeral=True)
+        try:
+            await interaction.followup.send("`❌` Failed to purge messages. Check bot permissions.", ephemeral=True)
+        except:
+            pass
 
 # --------- /purge any ---------
 @purge_group.command(name="any", description="Delete any messages in the channel")
 @app_commands.describe(amount="Number of messages to delete")
 async def purge_any(interaction: discord.Interaction, amount: int):
-    await interaction.response.defer(ephemeral=True)
+    try:
+        await interaction.response.defer(ephemeral=True)
+    except Exception as e:
+        logger.warning(f"Purge any defer failed (ignoring): {e}")
+
+    logger.info(f"ACTION: /purge any | Amount: {amount} | User: {interaction.user}")
+    
     try:
         deleted = await interaction.channel.purge(limit=amount)
-        await interaction.followup.send(f"`✅` Deleted {len(deleted)} messages from the channel.", ephemeral=True)
+        
+        try:
+            await interaction.followup.send(f"`✅` Deleted {len(deleted)} messages from the channel.", ephemeral=True)
+        except:
+            logger.warning("Could not send followup for purge any (interaction expired), but messages were deleted.")
+            
     except Exception as e:
         logger.error(f"Error in purge any: {type(e).__name__} - {e}")
-        await interaction.followup.send("`❌` Failed to purge messages.", ephemeral=True)
+        try:
+            await interaction.followup.send("`❌` Failed to purge messages.", ephemeral=True)
+        except:
+            pass
 
 bot.tree.add_command(purge_group)
 
