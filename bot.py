@@ -293,7 +293,7 @@ def get_balance():
         for td in soup.find_all("td"):
             if "Available total traffic" in td.get_text(strip=True):
                 balance = td.find_next_sibling("td").get_text(strip=True)
-                logger.info(f"Successfully fetched balance: {balance}")
+                logger.info(f"Successfully fetched balance")
                 return balance
         
         logger.warning("Balance field 'Available total traffic' not found in dashboard HTML.")
@@ -690,7 +690,7 @@ async def rm(interaction: discord.Interaction, mac: str):
 async def blkall(interaction: discord.Interaction):
     logger.info(f"ACTION: /blkall | User: {interaction.user}")
     
-    await interaction.resonse.defer(ephemeral=True)
+    await interaction.response.defer(ephemeral=True)
     
     try:
         options = []
@@ -863,7 +863,7 @@ async def balance(interaction: discord.Interaction):
             color=0xe74c3c
         )
         await interaction.followup.send(embed=embed)
-        
+
 # --------- /netstat ---------
 @bot.tree.command(name="netstat", description="Show all recognized devices and their usage")
 async def netstat(interaction: discord.Interaction):
