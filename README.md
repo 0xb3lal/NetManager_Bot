@@ -42,6 +42,14 @@ pip install -r requirements.txt
 python netman.py
 ```
 
+## ⚠️ Known Issues & Troubleshooting
+
+### Connection Timeout / Discord 404 (Interaction Failed)
+* **Problem:** The bot experiences abrupt connection timeouts or fails to receive timely responses from the local Tomato router and Radius server (`10.0.0.254`), causing Discord slash commands to fail with `404 Unknown interaction`. This is typically caused by a mismatch in Linux Kernel TCP extension tracking (`tcp_timestamps`) between the host OS (e.g., Fedora) and the router's older TCP stack.
+* **Solution:** Disable TCP timestamps on the host machine by running the following command:
+  ```bash
+  sudo sysctl -w net.ipv4.tcp_timestamps=0
+  ```
 ## How It Works
 
 1. The script logs into the Radius Manager portal to check available traffic
@@ -49,7 +57,6 @@ python netman.py
 3. If traffic is sufficient, it maintains any manual bans while allowing other devices
 4. A background thread continuously monitors Telegram for commands to ban/unban devices
 5. All actions are reported via Telegram notifications
-
 ## Security Note
 
 This script contains sensitive credentials. Keep it secure and never commit credentials to version control.
