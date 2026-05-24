@@ -437,13 +437,13 @@ async def daily_network_report():
 # ========= Compile big data in backgraound =========
 def compile_netstat_data():
     speed_history = get_speed_history()
-    
     router = requests.Session()
     router.auth = ROUTER_AUTH
     router.verify = False
     url = f"{ROUTER_URL}/update.cgi"
+    data = "exec=devlist&_http_id=TIDe5b1505eeac7f67f"
+    r = router.post(url, data=data, timeout=5) 
     
-    r = router.post(url, data="exec=devlist&_http_id=TIDe5b1505eeac7f67f", timeout=30)
     dhcp_leases = demjson3.decode(re.search(r"dhcpd_lease\s*=\s*(\[.*?\]);", r.text).group(1))
     wireless_devs = demjson3.decode(re.search(r"wldev\s*=\s*(\[.*?\]);", r.text).group(1))
     
