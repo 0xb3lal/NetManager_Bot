@@ -1,5 +1,6 @@
 import os
 import re
+import json
 import hmac
 import copy
 import urllib3
@@ -30,6 +31,7 @@ DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
 GUILD_ID = discord.Object(id=1475047474832867338) 
 CHANNEL_ID = int(os.getenv("CHANNEL_ID")) if os.getenv("CHANNEL_ID") else 0
 CONFIG_FILE = "settings.conf"
+BANNED_MACS_FILE = "bannedDevices.json"
 ALLOWED_MACS = [
     "4C:20:B8:87:12:E2",
     "F8:34:41:DA:93:EB",
@@ -143,6 +145,23 @@ def save_threshold(value):
 
 THRESHOLD = load_threshold()
 
+# ========= BANNED MACS PERSISTENCE =========
+def save_banned_macs():
+    try:
+        with open(BANNED_MACS_FILE, "w") as f:
+            json.dump(list(BANNED_MACS), f)
+    except Exception as e:
+        logger.error(f"Error saving banned MACs: {e}")
+
+def load_banned_macs():
+    try:
+        if os.path.exists(BANNED_MACS_FILE):
+            with open(BANNED_MACS_FILE, "r") as f:
+                return set(json.load(f))
+    except Exception as e:
+        logger.error(f"Error loading banned MACs: {e}")
+    return set()
+
 # ========= ONLINE DEVICES HELPER =========
 def get_router_devices_raw():
     router = requests.Session()
@@ -199,6 +218,7 @@ def ban_mac(router, headers, mac):
     mac = mac.upper()
     if mac not in BANNED_MACS:
         BANNED_MACS.add(mac)
+        save_banned_macs()
         logger.info(f"Internal: Added {mac} to memory banned set.")
         enable_lockdown(router, headers, force_lock=False)
     else:
@@ -208,6 +228,7 @@ def unban_mac(router, headers, mac):
     mac = mac.upper()
     if mac in BANNED_MACS:
         BANNED_MACS.remove(mac)
+        save_banned_macs()
         logger.info(f"Internal: Removed {mac} from memory banned set.")
         enable_lockdown(router, headers, force_lock=False)
     else:
@@ -564,7 +585,7 @@ class MyBot(discord.Client):
     async def setup_hook(self):
         self.tree.copy_global_to(guild=GUILD_ID)
         await self.tree.sync(guild=GUILD_ID)
-        
+
         # Start existing traffic check
         if not traffic_check_task.is_running():
             traffic_check_task.start()
@@ -573,9 +594,23 @@ class MyBot(discord.Client):
         if not daily_network_report.is_running():
             daily_network_report.start()
 
+    async def on_ready(self):
+        logger.info(f"Bot ready: {self.user}")
+        global BANNED_MACS
+        BANNED_MACS = load_banned_macs()
+        if BANNED_MACS:
+            logger.info(f"Loaded {len(BANNED_MACS)} banned MACs from file, reapplying firewall rules...")
+            await asyncio.to_thread(_reapply_banned_macs)
+
 bot = MyBot()
 
 # ========= Helpers Functions =========
+def _reapply_banned_macs():
+    router = requests.Session()
+    router.auth = ROUTER_AUTH
+    headers = {"Content-Type": "text/plain;charset=UTF-8", "Referer": ROUTER_URL + "/", "Origin": ROUTER_URL}
+    enable_lockdown(router, headers, force_lock=False)
+
 async def mac_autocomplete(interaction: discord.Interaction, current: str):
     choices = [
         app_commands.Choice(name=name, value=mac)
