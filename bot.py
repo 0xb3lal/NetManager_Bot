@@ -1169,7 +1169,7 @@ async def botstatus(interaction: discord.Interaction):
         f"{link_line}\n"
         f"```"
     )
-
+    logger.info(f"Bot status requested by {interaction.user}")
     embed = discord.Embed(
         title=f"`{title_icon}` System Health Dashboard",
         description=status_box,
