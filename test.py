@@ -546,7 +546,7 @@ class BulkBlockSelect(discord.ui.Select):
 
 class BulkBlockView(discord.ui.View):
     def __init__(self, options):
-        super().__init__(timeout=60)
+        super().__init__(timeout=180)
         self.add_item(BulkBlockSelect(options))
 
 # ========= RemoveAll SETUP =========
@@ -600,7 +600,7 @@ class BulkUnblockSelect(discord.ui.Select):
 
 class BulkUnblockView(discord.ui.View):
     def __init__(self, options):
-        super().__init__(timeout=60)
+        super().__init__(timeout=180)
         self.add_item(BulkUnblockSelect(options))
 
 # ========= DISCORD BOT SETUP =========
