@@ -1,5 +1,6 @@
 import os
 import re
+import json
 import hmac
 import copy
 import urllib3
@@ -30,10 +31,11 @@ DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
 GUILD_ID = discord.Object(id=1475047474832867338) 
 CHANNEL_ID = int(os.getenv("CHANNEL_ID")) if os.getenv("CHANNEL_ID") else 0
 CONFIG_FILE = "settings.conf"
+BANNED_MACS_FILE = "bannedDevices.json"
 ALLOWED_MACS = [
     "4C:20:B8:87:12:E2",
     "F8:34:41:DA:93:EB",
-    "DC:53:60:73:FD:84"
+    "32:AC:87:47:17:5D"
 ]
 MACS_LIST = {
     "D2:C5:E2:DE:F5:B4": "Baba",
@@ -143,6 +145,23 @@ def save_threshold(value):
 
 THRESHOLD = load_threshold()
 
+# ========= BANNED MACS PERSISTENCE =========
+def save_banned_macs():
+    try:
+        with open(BANNED_MACS_FILE, "w") as f:
+            json.dump(list(BANNED_MACS), f)
+    except Exception as e:
+        logger.error(f"Error saving banned MACs: {e}")
+
+def load_banned_macs():
+    try:
+        if os.path.exists(BANNED_MACS_FILE):
+            with open(BANNED_MACS_FILE, "r") as f:
+                return set(json.load(f))
+    except Exception as e:
+        logger.error(f"Error loading banned MACs: {e}")
+    return set()
+
 # ========= ONLINE DEVICES HELPER =========
 def get_router_devices_raw():
     router = requests.Session()
@@ -199,6 +218,7 @@ def ban_mac(router, headers, mac):
     mac = mac.upper()
     if mac not in BANNED_MACS:
         BANNED_MACS.add(mac)
+        save_banned_macs()
         logger.info(f"Internal: Added {mac} to memory banned set.")
         enable_lockdown(router, headers, force_lock=False)
     else:
@@ -208,6 +228,7 @@ def unban_mac(router, headers, mac):
     mac = mac.upper()
     if mac in BANNED_MACS:
         BANNED_MACS.remove(mac)
+        save_banned_macs()
         logger.info(f"Internal: Removed {mac} from memory banned set.")
         enable_lockdown(router, headers, force_lock=False)
     else:
@@ -373,24 +394,40 @@ def get_dhcp_mapping():
 # ========= STATUS OF SERVICES HELPER ========= 
 def check_bot_services():
     status = {}
-    # 1. CIFS (Samba)
+
     try:
-        r = requests.get(f"{ROUTER_URL}/nas-cifs.asp", auth=ROUTER_AUTH, timeout=4)
-        status['cifs'] = "ONLINE" if "Not Mounted" not in r.text else "OFFLINE"
-    except: status['cifs'] = "TIMEOUT"
+    # 1. CIFS2 Check
+        router = requests.Session()
+        router.auth = ROUTER_AUTH
+        headers = {
+            "Referer": f"{ROUTER_URL}/",
+            "User-Agent": "Mozilla/5.0",
+        }
+        data = "action=execute&command=df -h\n&_http_id=TIDe5b1505eeac7f67f"
+        r = router.post(
+            f"{ROUTER_URL}/shell.cgi",
+            headers=headers,
+            data=data,
+            timeout=5
+        )
+        status['cifs'] = "ONLINE" if "/cifs2" in r.text else "OFFLINE"
+    except:
+        status['cifs'] = "TIMEOUT"
 
     # 2. Radius Dashboard
     try:
         r = requests.get("http://10.0.0.254/radiusmanager/user.php", timeout=3)
         status['radius'] = "READY" if r.status_code == 200 else "DOWN"
-    except: status['radius'] = "DOWN"
+    except:
+        status['radius'] = "DOWN"
 
     # 3. Router Connectivity
     try:
         r = requests.get(ROUTER_URL, auth=ROUTER_AUTH, timeout=3)
         status['link'] = "OK" if r.status_code == 200 else "AUTH_ERR"
-    except: status['link'] = "UNREACHABLE"
-    
+    except:
+        status['link'] = "UNREACHABLE"
+
     return status
 
 # ========= Helper: fetch devlist from router in a thread =========
@@ -411,13 +448,19 @@ def _fetch_devlist():
     return dhcp_leases, wireless_devs
 
 # ========= DAILY REPORT HELPER ========= 
-REPORT_TIME = time(hour=23, minute=45, tzinfo=ZoneInfo("Africa/Cairo"))
+REPORT_TIME = time(hour=23, minute=59, tzinfo=ZoneInfo("Africa/Cairo"))
 
 @tasks.loop(time=REPORT_TIME)
 async def daily_network_report():
     try:
         speed_history = await asyncio.to_thread(get_speed_history)
-        dhcp_leases, _ = await asyncio.to_thread(_fetch_devlist)
+        router = requests.Session()
+        router.auth = ROUTER_AUTH
+        router.verify = False
+        url = f"{ROUTER_URL}/update.cgi"
+        data = "exec=devlist&_http_id=TIDe5b1505eeac7f67f"
+        r = await asyncio.to_thread(router.post, url, data=data, timeout=10)
+        dhcp_leases = demjson3.decode(re.search(r"dhcpd_lease\s*=\s*(\[.*?\]);", r.text).group(1))
         devices_info = {lease[2].upper(): {"name": lease[0], "ip": lease[1]} for lease in dhcp_leases}
         
         combined_data = []
@@ -440,14 +483,19 @@ async def daily_network_report():
         if combined_data:
             channel = bot.get_channel(CHANNEL_ID)
             if not channel: return
+            now = datetime.now(ZoneInfo("Africa/Cairo"))
             lines = [f"`{dev['name'][:15].ljust(15)} | 📊{(f'{dev['usage']/1024:.1f}GB' if dev['usage']>=1024 else f'{int(dev['usage'])}MB').rjust(8)}`" for dev in combined_data[:15]]
-            embed = discord.Embed(title=f"📅 Daily Usage Report ({datetime.now().strftime('%Y-%m-%d')})", description="\n".join(lines), color=0x3498db, timestamp=datetime.now())
+            embed = discord.Embed(title=f"📅 Daily Usage Report ({now.strftime('%Y-%m-%d')})", description="\n".join(lines), color=0x3498db, timestamp=now)
             embed.set_footer(text=f"Total Network Load: {total_day_usage_mb/1024:.2f} GB")
             await channel.send(embed=embed)
     except Exception as e:
         logger.error(f"Error in daily_network_report: {e}")
 
-# ---------------------------------
+@daily_network_report.before_loop
+async def before_daily_report():
+    await bot.wait_until_ready()
+
+# ========= BlockAll SETUP =========
 class BulkBlockSelect(discord.ui.Select):
     def __init__(self, options):
         super().__init__(
@@ -501,7 +549,7 @@ class BulkBlockView(discord.ui.View):
         super().__init__(timeout=60)
         self.add_item(BulkBlockSelect(options))
 
-# ----------------------------------------------
+# ========= RemoveAll SETUP =========
 class BulkUnblockSelect(discord.ui.Select):
     def __init__(self, options):
         super().__init__(
@@ -558,13 +606,13 @@ class BulkUnblockView(discord.ui.View):
 # ========= DISCORD BOT SETUP =========
 class MyBot(discord.Client):
     def __init__(self):
-        super().__init__(intents=discord.Intents.default())
+        super().__init__(intents=discord.Intents.default(), heartbeat_timeout=150.0)
         self.tree = app_commands.CommandTree(self)
 
     async def setup_hook(self):
         self.tree.copy_global_to(guild=GUILD_ID)
         await self.tree.sync(guild=GUILD_ID)
-        
+
         # Start existing traffic check
         if not traffic_check_task.is_running():
             traffic_check_task.start()
@@ -573,9 +621,32 @@ class MyBot(discord.Client):
         if not daily_network_report.is_running():
             daily_network_report.start()
 
+    async def on_connect(self):
+        logger.info("Bot connected to Discord gateway.")
+
+    async def on_disconnect(self):
+        logger.warning("Bot disconnected from Discord. Waiting to reconnect...")
+
+    async def on_resumed(self):
+        logger.info("Bot connection resumed successfully.")
+
+    async def on_ready(self):
+        logger.info(f"Bot ready: {self.user}")
+        global BANNED_MACS
+        BANNED_MACS = load_banned_macs()
+        if BANNED_MACS:
+            logger.info(f"Loaded {len(BANNED_MACS)} banned MACs from file, reapplying firewall rules...")
+            await asyncio.to_thread(_reapply_banned_macs)
+
 bot = MyBot()
 
-# ========= Helpers Functions =========
+# ========= Helpers Functions For Commands =========
+def _reapply_banned_macs():
+    router = requests.Session()
+    router.auth = ROUTER_AUTH
+    headers = {"Content-Type": "text/plain;charset=UTF-8", "Referer": ROUTER_URL + "/", "Origin": ROUTER_URL}
+    enable_lockdown(router, headers, force_lock=False)
+
 async def mac_autocomplete(interaction: discord.Interaction, current: str):
     choices = [
         app_commands.Choice(name=name, value=mac)
@@ -701,6 +772,75 @@ async def rm(interaction: discord.Interaction, mac: str):
             await interaction.followup.send("`❌` Router Error: Failed to remove block.")
         except:
             pass
+# --------- /blkall ---------
+@bot.tree.command(name="blkall", description="Select multiple saved devices to block")
+async def blkall(interaction: discord.Interaction):
+    try:
+        await interaction.response.defer(ephemeral=True)
+    except Exception as e:
+        logger.error(f"Failed to defer /blkall: {e}")
+        return
+
+    logger.info(f"ACTION: /blkall | User: {interaction.user}")
+    
+    try:
+        options = []
+        for mac, name in MACS_LIST.items():
+            mac_upper = mac.upper()
+            
+            if mac_upper in BANNED_MACS:
+                continue
+                
+            options.append(discord.SelectOption(
+                label=name,
+                value=mac_upper,
+                description=f"MAC: {mac_upper}"
+            ))
+
+        if not options:
+            await interaction.followup.send("`⚠️` All saved devices are already blocked or list is empty.")
+            return
+
+        view = BulkBlockView(options[:25])
+        await interaction.followup.send("Select the saved devices you want to block:", view=view)
+
+    except Exception as e:
+        logger.error(f"FAILURE in blkall: {e}")
+        await interaction.followup.send(f"`❌` Error: {str(e)}")
+
+# --------- /rmall ---------
+@bot.tree.command(name="rmall", description="Select multiple devices to unblock from the banned list")
+async def rmall(interaction: discord.Interaction):
+    try:
+        await interaction.response.defer(ephemeral=True)
+    except Exception as e:
+        logger.error(f"Failed to defer /rmall: {e}")
+        return
+
+    logger.info(f"ACTION: /rmall | User: {interaction.user}")
+    
+    try:
+        options = []
+        for mac in BANNED_MACS:
+            mac_upper = mac.upper()
+            display_name = MACS_LIST.get(mac_upper, f"Unknown ({mac_upper})")
+            
+            options.append(discord.SelectOption(
+                label=display_name,
+                value=mac_upper,
+                description=f"MAC: {mac_upper}"
+            ))
+
+        if not options:
+            await interaction.followup.send("`⚠️` No devices are currently banned.", ephemeral=True)
+            return
+
+        view = BulkUnblockView(options[:25])
+        await interaction.followup.send("Select the devices you want to unblock:", view=view)
+
+    except Exception as e:
+        logger.error(f"FAILURE in rmall: {e}")
+        await interaction.followup.send(f"`❌` Error: {str(e)}")
 
 # --------- /macs ---------
 @bot.tree.command(name="macs", description="List known MAC names")
@@ -758,7 +898,7 @@ async def list_banned(interaction: discord.Interaction):
             embed_color = 0x95a5a6
 
         embed = discord.Embed(
-            title=f"`🚫` Blockde Devices ({count})",
+            title=f"`🚫` Blocked Devices ({count})",
             description=banned_output,
             color=embed_color
         )
@@ -1038,7 +1178,7 @@ async def botstatus(interaction: discord.Interaction):
         f"{link_line}\n"
         f"```"
     )
-
+    logger.info(f"Bot status requested by {interaction.user}")
     embed = discord.Embed(
         title=f"`{title_icon}` System Health Dashboard",
         description=status_box,
@@ -1046,81 +1186,6 @@ async def botstatus(interaction: discord.Interaction):
     )
     
     await interaction.followup.send(embed=embed)
-
-@bot.tree.command(name="testreport", description="Manually trigger the daily report for testing")
-async def testreport(interaction: discord.Interaction):
-    await interaction.response.send_message("Testing report generation...", ephemeral=True)
-    await daily_network_report()
-
-# -------------------------------
-@bot.tree.command(name="blkall", description="Select multiple saved devices to block")
-async def blkall(interaction: discord.Interaction):
-    try:
-        await interaction.response.defer(ephemeral=True)
-    except Exception as e:
-        logger.error(f"Failed to defer /blkall: {e}")
-        return
-
-    logger.info(f"ACTION: /blkall | User: {interaction.user}")
-    
-    try:
-        options = []
-        for mac, name in MACS_LIST.items():
-            mac_upper = mac.upper()
-            
-            if mac_upper in BANNED_MACS:
-                continue
-                
-            options.append(discord.SelectOption(
-                label=name,
-                value=mac_upper,
-                description=f"MAC: {mac_upper}"
-            ))
-
-        if not options:
-            await interaction.followup.send("`⚠️` All saved devices are already blocked or list is empty.")
-            return
-
-        view = BulkBlockView(options[:25])
-        await interaction.followup.send("Select the saved devices you want to block:", view=view)
-
-    except Exception as e:
-        logger.error(f"FAILURE in blkall: {e}")
-        await interaction.followup.send(f"`❌` Error: {str(e)}")
-
-# -------------------------
-@bot.tree.command(name="rmall", description="Select multiple devices to unblock from the banned list")
-async def rmall(interaction: discord.Interaction):
-    try:
-        await interaction.response.defer(ephemeral=True)
-    except Exception as e:
-        logger.error(f"Failed to defer /rmall: {e}")
-        return
-
-    logger.info(f"ACTION: /rmall | User: {interaction.user}")
-    
-    try:
-        options = []
-        for mac in BANNED_MACS:
-            mac_upper = mac.upper()
-            display_name = MACS_LIST.get(mac_upper, f"Unknown ({mac_upper})")
-            
-            options.append(discord.SelectOption(
-                label=display_name,
-                value=mac_upper,
-                description=f"MAC: {mac_upper}"
-            ))
-
-        if not options:
-            await interaction.followup.send("`⚠️` No devices are currently banned.", ephemeral=True)
-            return
-
-        view = BulkUnblockView(options[:25])
-        await interaction.followup.send("Select the devices you want to unblock:", view=view)
-
-    except Exception as e:
-        logger.error(f"FAILURE in rmall: {e}")
-        await interaction.followup.send(f"`❌` Error: {str(e)}")
 
 # ========= THREADS =========
 @tasks.loop(hours=1.0)
@@ -1141,7 +1206,7 @@ async def before_traffic_check():
 async def main():
     try:
         async with bot:
-            await bot.start(DISCORD_TOKEN)
+            await bot.start(DISCORD_TOKEN, reconnect=True)
     except asyncio.CancelledError:
         logger.warning("Main coroutine cancelled.")
     except Exception as e:
