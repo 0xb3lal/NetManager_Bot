@@ -195,6 +195,11 @@ def load_banned_macs():
     return set()
 
 def _router_heartbeat():
+    """
+    Keeps the router shell session warm. Uses a short timeout (3s) so it
+    never holds the ROUTER_LOCK long enough to affect real commands.
+    Silently skips on timeout — this is best-effort only.
+    """
     try:
         router = requests.Session()
         router.auth = ROUTER_AUTH
@@ -203,12 +208,13 @@ def _router_heartbeat():
             "Referer": f"{ROUTER_URL}/",
             "User-Agent": "Mozilla/5.0",
         }
-        # Lightweight no-op command just to keep the router's shell.cgi
-        # session warm and responsive (avoids the "first command fails" issue)
-        run_cmd(router, headers, "true", _retry=False)
+        data = "action=execute&command=true\n&_http_id=TIDe5b1505eeac7f67f"
+        router.post(f"{ROUTER_URL}/shell.cgi", headers=headers, data=data, timeout=3)
         logger.debug("Router heartbeat sent successfully.")
+    except (ReadTimeout, ConnectionError):
+        logger.debug("Router heartbeat timed out (router busy), skipping.")
     except Exception as e:
-        logger.error(f"Router heartbeat failed: {e}")
+        logger.debug(f"Router heartbeat failed: {e}")
 
 # ========= USAGE OFFSETS PERSISTENCE (survive router reboots) =========
 def load_usage_state():
