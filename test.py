@@ -350,37 +350,44 @@ def unban_mac(router, headers, mac):
     else:
         logger.warning(f"Internal: Attempted to unban {mac} but it wasn't in the list.")
 
-def check_and_lock(bot_instance):
+def _fetch_radius_traffic():
+    """Fetch available traffic from Radius dashboard. No router involved — no lock needed."""
     session = requests.Session()
     md5_password = hex_md5(D_PASSWORD)
     md5_final = hex_hmac_md5(D_USERNAME, md5_password)
     payload = {"username": D_USERNAME, "md5": md5_final, "Submit": "Submit"}
+    session.post("http://10.0.0.254/radiusmanager/user.php?cont=login", data=payload, timeout=10)
+    session.get("http://10.0.0.254/radiusmanager/user.php?cont=change_lang&lang=English", timeout=10)
+    dash = session.get("http://10.0.0.254/radiusmanager/user.php", timeout=10)
+    soup = BeautifulSoup(dash.text, "html.parser")
+    for td in soup.find_all("td"):
+        if "Available total traffic" in td.get_text(strip=True):
+            return td.find_next_sibling("td").get_text(strip=True)
+    return None
 
+def _apply_lockdown_for_traffic(traffic_value):
+    """Apply router firewall rules based on traffic value. Caller must hold ROUTER_LOCK."""
+    router = requests.Session()
+    router.auth = ROUTER_AUTH
+    headers = {"Content-Type": "text/plain;charset=UTF-8", "Referer": ROUTER_URL + "/", "Origin": ROUTER_URL}
+    if traffic_value < THRESHOLD:
+        enable_lockdown(router, headers, force_lock=True)
+        return "`❌` System Lockdown", 0xff4747
+    else:
+        enable_lockdown(router, headers, force_lock=False)
+        return "`✅` System Normal", 0x47ff7e
+
+def check_and_lock(bot_instance):
     try:
-        session.post("http://10.0.0.254/radiusmanager/user.php?cont=login", data=payload, timeout=10)
-        session.get("http://10.0.0.254/radiusmanager/user.php?cont=change_lang&lang=English", timeout=10)
-        dash = session.get("http://10.0.0.254/radiusmanager/user.php", timeout=10)
-        soup = BeautifulSoup(dash.text, "html.parser")
+        # Step 1: Fetch from Radius — no ROUTER_LOCK needed (different host)
+        available_traffic = _fetch_radius_traffic()
+        if not available_traffic:
+            return
 
-        available_traffic = None
-        for td in soup.find_all("td"):
-            if "Available total traffic" in td.get_text(strip=True):
-                available_traffic = td.find_next_sibling("td").get_text(strip=True)
-                break
-
-        if not available_traffic: return
-        
         traffic_value = float(available_traffic.split()[0])
-        router = requests.Session()
-        router.auth = ROUTER_AUTH
-        headers = {"Content-Type": "text/plain;charset=UTF-8", "Referer": ROUTER_URL + "/", "Origin": ROUTER_URL}
 
-        if traffic_value < THRESHOLD:
-            enable_lockdown(router, headers, force_lock=True)
-            e_title, e_color = "`❌` System Lockdown", 0xff4747
-        else:
-            enable_lockdown(router, headers, force_lock=False)
-            e_title, e_color = "`✅` System Normal", 0x47ff7e
+        # Step 2: Apply router rules — caller already holds ROUTER_LOCK
+        e_title, e_color = _apply_lockdown_for_traffic(traffic_value)
 
         balance_label = "Balance:".ljust(9)
         limit_label   = "Limit:".ljust(9)
@@ -409,6 +416,44 @@ def check_and_lock(bot_instance):
                 
     except Exception as e:
         logger.error(f"Main Check Error: {e}")
+
+async def async_check_and_lock(bot_instance):
+    """
+    Two-phase traffic check:
+    Phase 1 — Radius fetch (no lock, different host, up to 30s OK)
+    Phase 2 — Router lockdown (holds ROUTER_LOCK, fast iptables only)
+    """
+    try:
+        available_traffic = await asyncio.to_thread(_fetch_radius_traffic)
+        if not available_traffic:
+            return
+        traffic_value = float(available_traffic.split()[0])
+
+        async with ROUTER_LOCK:
+            e_title, e_color = await asyncio.to_thread(
+                _apply_lockdown_for_traffic, traffic_value
+            )
+
+        balance_label = "Balance:".ljust(9)
+        limit_label   = "Limit:".ljust(9)
+        status_box = (
+            f"```\n"
+            f"{balance_label} {available_traffic}\n"
+            f"{limit_label} {THRESHOLD} GB\n"
+            f"```"
+        )
+        embed = discord.Embed(title=e_title, description=status_box, color=e_color)
+
+        try:
+            channel = bot_instance.get_channel(CHANNEL_ID)
+            if channel:
+                await channel.send(embed=embed)
+        except Exception:
+            logger.error("Failed to push status update to Discord")
+
+    except Exception as e:
+        logger.error(f"Main Check Error: {e}")
+
 
 # ========= Get Balance Only =========
 def get_balance():
@@ -734,6 +779,17 @@ class MyBot(discord.Client):
     def __init__(self):
         super().__init__(intents=discord.Intents.default())
         self.tree = app_commands.CommandTree(self)
+
+    async def on_tree_error(self, interaction: discord.Interaction, error: app_commands.AppCommandError):
+        # Silently ignore 10062 on autocomplete — Discord cancels old autocomplete
+        # interactions as the user keeps typing, so this is expected and harmless.
+        if isinstance(error, app_commands.errors.CommandInvokeError):
+            cause = error.original
+        else:
+            cause = error
+        if isinstance(cause, discord.errors.NotFound) and cause.code == 10062:
+            return
+        logger.error(f"Tree error in /{interaction.command.name if interaction.command else '?'}: {error}")
 
     async def setup_hook(self):
         self.tree.copy_global_to(guild=GUILD_ID)
@@ -1209,8 +1265,7 @@ async def set_limit(interaction: discord.Interaction, limit: float):
         
         await interaction.followup.send(embed=embed)
         
-        async with ROUTER_LOCK:
-            await asyncio.to_thread(check_and_lock, bot)
+        await async_check_and_lock(bot)
 
     except Exception as e:
         logger.error(f"Error in limit command: {e}")
@@ -1338,8 +1393,7 @@ async def before_heartbeat():
 async def traffic_check_task():
     logger.info("Starting scheduled traffic check...")
     try:
-        async with ROUTER_LOCK:
-            await asyncio.to_thread(check_and_lock, bot)
+        await async_check_and_lock(bot)
         logger.info("Scheduled traffic check completed successfully.")
     except Exception as e:
         logger.exception(f"Unexpected error during traffic check task: {e}")
