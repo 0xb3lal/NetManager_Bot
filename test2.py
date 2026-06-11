@@ -457,8 +457,13 @@ def get_speed_history():
     }
 
     try:
-        router.get(f"{ROUTER_URL}/", timeout=15)
-        
+        # Warm-up request: short timeout so we don't block the lock for 15s.
+        # The heartbeat_task already keeps the session warm, so failure here is fine.
+        try:
+            router.get(f"{ROUTER_URL}/", timeout=3)
+        except Exception:
+            logger.debug("Speed history warm-up skipped (router busy), proceeding anyway.")
+
         url = f"{ROUTER_URL}/update.cgi"
         
         init_data = "exec=ipt_bandwidth&arg0=start&_http_id=TIDe5b1505eeac7f67f"
@@ -1299,7 +1304,7 @@ async def botstatus(interaction: discord.Interaction):
     await interaction.followup.send(embed=embed)
 
 # ========= THREADS =========
-@tasks.loop(minutes=5.0)
+@tasks.loop(minutes=10.0)
 async def usage_tracker_task():
     async with ROUTER_LOCK:
         await asyncio.to_thread(update_usage_state)
@@ -1309,7 +1314,7 @@ async def before_usage_tracker():
     await bot.wait_until_ready()
     logger.info("Usage tracker started (persists traffic counters across router reboots).")
 
-@tasks.loop(seconds=10.0)
+@tasks.loop(seconds=30.0)
 async def heartbeat_task():
     # Skip if router is already busy — heartbeat is just a keepalive, not critical
     if ROUTER_LOCK.locked():
