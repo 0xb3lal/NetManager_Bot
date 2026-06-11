@@ -544,13 +544,14 @@ REPORT_TIME = time(hour=23, minute=59, tzinfo=ZoneInfo("Africa/Cairo"))
 @tasks.loop(time=REPORT_TIME)
 async def daily_network_report():
     try:
-        speed_history = await asyncio.to_thread(get_speed_history)
-        router = requests.Session()
-        router.auth = ROUTER_AUTH
-        router.verify = False
-        url = f"{ROUTER_URL}/update.cgi"
-        data = "exec=devlist&_http_id=TIDe5b1505eeac7f67f"
-        r = await asyncio.to_thread(router.post, url, data=data, timeout=10)
+        async with ROUTER_LOCK:
+            speed_history = await asyncio.to_thread(get_speed_history)
+            router = requests.Session()
+            router.auth = ROUTER_AUTH
+            router.verify = False
+            url = f"{ROUTER_URL}/update.cgi"
+            data = "exec=devlist&_http_id=TIDe5b1505eeac7f67f"
+            r = await asyncio.to_thread(router.post, url, data=data, timeout=10)
         dhcp_leases = demjson3.decode(re.search(r"dhcpd_lease\s*=\s*(\[.*?\]);", r.text).group(1))
         devices_info = {lease[2].upper(): {"name": lease[0], "ip": lease[1]} for lease in dhcp_leases}
         
@@ -612,12 +613,13 @@ class BulkBlockSelect(discord.ui.Select):
         }
         
         selected_macs = self.values
-        success_list = await asyncio.to_thread(
-            lambda: [
-                (ban_mac(router, headers, mac.upper()), MACS_LIST.get(mac.upper(), "Unknown"))[1]
-                for mac in selected_macs
-            ]
-        )
+        async with ROUTER_LOCK:
+            success_list = await asyncio.to_thread(
+                lambda: [
+                    (ban_mac(router, headers, mac.upper()), MACS_LIST.get(mac.upper(), "Unknown"))[1]
+                    for mac in selected_macs
+                ]
+            )
 
         lines = []
         for i, m in enumerate(BANNED_MACS, 1):
@@ -666,12 +668,13 @@ class BulkUnblockSelect(discord.ui.Select):
         }
         
         selected_macs = self.values
-        success_list = await asyncio.to_thread(
-            lambda: [
-                (unban_mac(router, headers, mac.upper()), MACS_LIST.get(mac.upper(), "Unknown"))[1]
-                for mac in selected_macs
-            ]
-        )
+        async with ROUTER_LOCK:
+            success_list = await asyncio.to_thread(
+                lambda: [
+                    (unban_mac(router, headers, mac.upper()), MACS_LIST.get(mac.upper(), "Unknown"))[1]
+                    for mac in selected_macs
+                ]
+            )
 
         lines = []
         for i, m in enumerate(BANNED_MACS, 1):
@@ -726,9 +729,16 @@ class MyBot(discord.Client):
         BANNED_MACS = load_banned_macs()
         if BANNED_MACS:
             logger.info(f"Loaded {len(BANNED_MACS)} banned MACs from file, reapplying firewall rules...")
-            await asyncio.to_thread(_reapply_banned_macs)
+            async with ROUTER_LOCK:
+                await asyncio.to_thread(_reapply_banned_macs)
 
 bot = MyBot()
+
+# ========= ROUTER LOCK =========
+# Single asyncio.Lock that serializes ALL router HTTP traffic.
+# The router (weak CPU/RAM) can't handle concurrent requests without timing out.
+# Every task or command that touches the router must acquire this lock first.
+ROUTER_LOCK = asyncio.Lock()
 
 # ========= Helpers Functions For Commands =========
 def _reapply_banned_macs():
@@ -779,10 +789,10 @@ async def ban(interaction: discord.Interaction, mac: str):
         router.auth = ROUTER_AUTH
         headers = {"Content-Type": "text/plain;charset=UTF-8", "Referer": ROUTER_URL + "/", "Origin": ROUTER_URL}
         
-        await asyncio.to_thread(ban_mac, router, headers, mac_upper)
+        async with ROUTER_LOCK:
+            await asyncio.to_thread(ban_mac, router, headers, mac_upper)
         
         device_name = MACS_LIST.get(mac_upper, "Unknown Device")
-        
         lines = []
         for i, m in enumerate(BANNED_MACS, 1):
             name = MACS_LIST.get(m, 'Unknown Device')
@@ -830,10 +840,10 @@ async def rm(interaction: discord.Interaction, mac: str):
         router.auth = ROUTER_AUTH
         headers = {"Content-Type": "text/plain;charset=UTF-8", "Referer": ROUTER_URL + "/", "Origin": ROUTER_URL} 
         
-        await asyncio.to_thread(unban_mac, router, headers, mac_upper)
+        async with ROUTER_LOCK:
+            await asyncio.to_thread(unban_mac, router, headers, mac_upper)
         
         device_name = MACS_LIST.get(mac_upper, "Unknown Device")
-        
         lines = []
         for i, m in enumerate(BANNED_MACS, 1):
             name = MACS_LIST.get(m, 'Unknown')
@@ -1061,8 +1071,9 @@ async def netstat(interaction: discord.Interaction):
     logger.info(f"Full network status requested by {interaction.user}")
     
     try:
-        speed_history = await asyncio.to_thread(get_speed_history)
-        dhcp_leases, wireless_devs = await asyncio.to_thread(_fetch_devlist)
+        async with ROUTER_LOCK:
+            speed_history = await asyncio.to_thread(get_speed_history)
+            dhcp_leases, wireless_devs = await asyncio.to_thread(_fetch_devlist)
 
         active_signals = {dev[1].upper(): dev[2] for dev in wireless_devs}
         devices_info = {lease[2].upper(): {"name": lease[0], "ip": lease[1]} for lease in dhcp_leases}
@@ -1176,7 +1187,8 @@ async def set_limit(interaction: discord.Interaction, limit: float):
         
         await interaction.followup.send(embed=embed)
         
-        await asyncio.to_thread(check_and_lock, bot)
+        async with ROUTER_LOCK:
+            await asyncio.to_thread(check_and_lock, bot)
 
     except Exception as e:
         logger.error(f"Error in limit command: {e}")
@@ -1244,7 +1256,8 @@ async def botstatus(interaction: discord.Interaction):
         logger.error(f"Failed to defer /botstatus: {e}")
         return
 
-    health = await asyncio.to_thread(check_bot_services)
+    async with ROUTER_LOCK:
+        health = await asyncio.to_thread(check_bot_services)
     def get_status_emoji(status_val):
         status_val = status_val.upper()
         if status_val in ["ONLINE", "READY", "OK"]:
@@ -1280,7 +1293,8 @@ async def botstatus(interaction: discord.Interaction):
 # ========= THREADS =========
 @tasks.loop(minutes=5.0)
 async def usage_tracker_task():
-    await asyncio.to_thread(update_usage_state)
+    async with ROUTER_LOCK:
+        await asyncio.to_thread(update_usage_state)
 
 @usage_tracker_task.before_loop
 async def before_usage_tracker():
@@ -1289,7 +1303,12 @@ async def before_usage_tracker():
 
 @tasks.loop(seconds=10.0)
 async def heartbeat_task():
-    await asyncio.to_thread(_router_heartbeat)
+    # Skip if router is already busy — heartbeat is just a keepalive, not critical
+    if ROUTER_LOCK.locked():
+        logger.debug("Router heartbeat skipped (router busy with another task).")
+        return
+    async with ROUTER_LOCK:
+        await asyncio.to_thread(_router_heartbeat)
 
 @heartbeat_task.before_loop
 async def before_heartbeat():
@@ -1300,7 +1319,8 @@ async def before_heartbeat():
 async def traffic_check_task():
     logger.info("Starting scheduled traffic check...")
     try:
-        await asyncio.to_thread(check_and_lock, bot)
+        async with ROUTER_LOCK:
+            await asyncio.to_thread(check_and_lock, bot)
         logger.info("Scheduled traffic check completed successfully.")
     except Exception as e:
         logger.exception(f"Unexpected error during traffic check task: {e}")
