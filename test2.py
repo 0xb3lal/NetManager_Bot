@@ -105,6 +105,32 @@ def hex_md5(data):
 def hex_hmac_md5(key, data):
     return hmac.new(key.encode(), data.encode(), hashlib.md5).hexdigest()
 
+async def safe_defer(interaction: discord.Interaction) -> bool:
+    """
+    Defers the interaction safely. Returns True if safe to send followup.
+    - 40060: already acknowledged (Discord retry) → treat as success.
+    - 10062: unknown/expired interaction → abort (return False).
+    """
+    if interaction.response.is_done():
+        return True
+    try:
+        await interaction.response.defer()
+        return True
+    except discord.errors.HTTPException as e:
+        cmd = interaction.command.name if interaction.command else "?"
+        if e.code == 40060:
+            logger.warning(f"Interaction already acknowledged for /{cmd} (40060), continuing.")
+            return True
+        elif e.code == 10062:
+            logger.warning(f"Unknown/expired interaction for /{cmd} (10062), aborting.")
+            return False
+        else:
+            logger.error(f"Failed to defer /{cmd}: {e}")
+            return False
+    except Exception as e:
+        logger.error(f"Failed to defer: {e}")
+        return False
+
 # ========= ROUTER EXEC =========
 def run_cmd(router, headers, cmd, _retry=True):
     data = f"action=execute&command={cmd}\n&_http_id=TIDe5b1505eeac7f67f"
@@ -775,10 +801,8 @@ def get_banned_list_text():
 @bot.tree.command(name="blk", description="Ban a MAC address from the list")
 @app_commands.autocomplete(mac=mac_autocomplete)
 async def ban(interaction: discord.Interaction, mac: str):
-    try:
-        await interaction.response.defer()
-    except Exception as e:
-        logger.warning(f"Failed to defer /blk: {e}")
+    if not await safe_defer(interaction):
+        return
 
     logger.info(f"ACTION: /blk | User: {interaction.user} | Target: {mac}")
     
@@ -825,10 +849,8 @@ async def ban(interaction: discord.Interaction, mac: str):
 @bot.tree.command(name="rm", description="Unban a device from the current banned list")
 @app_commands.autocomplete(mac=banned_macs_autocomplete)
 async def rm(interaction: discord.Interaction, mac: str):
-    try:
-        await interaction.response.defer()
-    except Exception as e:
-        logger.warning(f"Failed to defer /rm: {e}")
+    if not await safe_defer(interaction):
+        return
 
     logger.info(f"ACTION: /rm | User: {interaction.user} | Target MAC: {mac}")
     
@@ -873,10 +895,8 @@ async def rm(interaction: discord.Interaction, mac: str):
 # --------- /blkall ---------
 @bot.tree.command(name="blkall", description="Select multiple saved devices to block")
 async def blkall(interaction: discord.Interaction):
-    try:
-        await interaction.response.defer(ephemeral=True)
-    except Exception as e:
-        logger.warning(f"Failed to defer /blkall: {e}")
+    if not await safe_defer(interaction):
+        return
 
     logger.info(f"ACTION: /blkall | User: {interaction.user}")
     
@@ -1059,12 +1079,8 @@ async def balance(interaction: discord.Interaction):
 # --------- /netstat ---------
 @bot.tree.command(name="netstat", description="Show all recognized devices and their usage")
 async def netstat(interaction: discord.Interaction):
-    try:
-        await interaction.response.defer()
-    except Exception as e:
-        # 10062 = Unknown interaction (expired or double-trigger).
-        # Don't return — the followup can still succeed if Discord delivered the interaction late.
-        logger.warning(f"Failed to defer /netstat: {e}")
+    if not await safe_defer(interaction):
+        return
 
     logger.info(f"Full network status requested by {interaction.user}")
     
@@ -1154,10 +1170,8 @@ async def netstat(interaction: discord.Interaction):
 async def set_limit(interaction: discord.Interaction, limit: float):
     global THRESHOLD
     
-    try:
-        await interaction.response.defer()
-    except Exception as e:
-        logger.warning(f"Failed to defer /limit: {e}")
+    if not await safe_defer(interaction):
+        return
 
     try:
         old_limit = THRESHOLD
@@ -1247,10 +1261,8 @@ bot.tree.add_command(purge_group)
 # --------- /botstatus ---------
 @bot.tree.command(name="botstatus", description="Check core system services status")
 async def botstatus(interaction: discord.Interaction):
-    try:
-        await interaction.response.defer()
-    except Exception as e:
-        logger.warning(f"Failed to defer /botstatus: {e}")
+    if not await safe_defer(interaction):
+        return
 
     async with ROUTER_LOCK:
         health = await asyncio.to_thread(check_bot_services)
