@@ -106,16 +106,19 @@ def hex_md5(data):
 def hex_hmac_md5(key, data):
     return hmac.new(key.encode(), data.encode(), hashlib.md5).hexdigest()
 
-async def safe_defer(interaction: discord.Interaction) -> bool:
+async def safe_defer(interaction: discord.Interaction, thinking: bool = False) -> bool:
     """
     Defers the interaction safely. Returns True if safe to send followup.
+    - thinking=True: shows a loading indicator and extends the followup window to 15 minutes.
+                     Use this for any command that acquires ROUTER_LOCK or does heavy I/O.
+    - thinking=False: silent defer with a 3-second window. Use only for instant memory-only commands.
     - 40060: already acknowledged (Discord retry) → treat as success.
     - 10062: unknown/expired interaction → abort (return False).
     """
     if interaction.response.is_done():
         return True
     try:
-        await interaction.response.defer()
+        await interaction.response.defer(thinking=thinking)
         return True
     except discord.errors.HTTPException as e:
         cmd = interaction.command.name if interaction.command else "?"
@@ -688,25 +691,29 @@ class BulkBlockSelect(discord.ui.Select):
         router = requests.Session()
         router.auth = ROUTER_AUTH
         headers = {
-            "Content-Type": "text/plain;charset=UTF-8", 
-            "Referer": f"{ROUTER_URL}/", 
+            "Content-Type": "text/plain;charset=UTF-8",
+            "Referer": f"{ROUTER_URL}/",
             "Origin": ROUTER_URL
         }
-        
-        selected_macs = self.values
-        async with ROUTER_LOCK:
-            success_list = await asyncio.to_thread(
-                lambda: [
-                    (ban_mac(router, headers, mac.upper()), MACS_LIST.get(mac.upper(), "Unknown"))[1]
-                    for mac in selected_macs
-                ]
-            )
 
-        lines = []
-        for i, m in enumerate(BANNED_MACS, 1):
-            name = MACS_LIST.get(m, 'Unknown Device')
-            lines.append(f"{i:02d}. {name}")
-        
+        selected_macs = [m.upper() for m in self.values]
+
+        def _bulk_ban():
+            added = []
+            for mac in selected_macs:
+                if mac not in BANNED_MACS:
+                    BANNED_MACS.add(mac)
+                    added.append(mac)
+                    logger.info(f"Internal: Added {mac} to memory banned set.")
+            if added:
+                save_banned_macs()
+                enable_lockdown(router, headers, force_lock=False)
+            return [MACS_LIST.get(m, "Unknown") for m in selected_macs]
+
+        async with ROUTER_LOCK:
+            success_list = await asyncio.to_thread(_bulk_ban)
+
+        lines = [f"{i:02d}. {MACS_LIST.get(m, 'Unknown Device')}" for i, m in enumerate(BANNED_MACS, 1)]
         current_list = "```\n" + "\n".join(lines) + "```" if lines else "No devices currently banned"
 
         embed = discord.Embed(
@@ -715,7 +722,7 @@ class BulkBlockSelect(discord.ui.Select):
             color=0xff4747
         )
         embed.add_field(name="`📝` Updated Banned List", value=current_list, inline=False)
-        
+
         await interaction.followup.send(embed=embed)
 
 class BulkBlockView(discord.ui.View):
@@ -880,7 +887,7 @@ def get_banned_list_text():
 @bot.tree.command(name="blk", description="Ban a MAC address from the list")
 @app_commands.autocomplete(mac=mac_autocomplete)
 async def ban(interaction: discord.Interaction, mac: str):
-    if not await safe_defer(interaction):
+    if not await safe_defer(interaction, thinking=True):
         return
 
     logger.info(f"ACTION: /blk | User: {interaction.user} | Target: {mac}")
@@ -928,7 +935,7 @@ async def ban(interaction: discord.Interaction, mac: str):
 @bot.tree.command(name="rm", description="Unban a device from the current banned list")
 @app_commands.autocomplete(mac=banned_macs_autocomplete)
 async def rm(interaction: discord.Interaction, mac: str):
-    if not await safe_defer(interaction):
+    if not await safe_defer(interaction, thinking=True):
         return
 
     logger.info(f"ACTION: /rm | User: {interaction.user} | Target MAC: {mac}")
@@ -974,7 +981,7 @@ async def rm(interaction: discord.Interaction, mac: str):
 # --------- /blkall ---------
 @bot.tree.command(name="blkall", description="Select multiple saved devices to block")
 async def blkall(interaction: discord.Interaction):
-    if not await safe_defer(interaction):
+    if not await safe_defer(interaction, thinking=True):
         return
 
     logger.info(f"ACTION: /blkall | User: {interaction.user}")
@@ -1007,10 +1014,7 @@ async def blkall(interaction: discord.Interaction):
 # --------- /rmall ---------
 @bot.tree.command(name="rmall", description="Select multiple devices to unblock from the banned list")
 async def rmall(interaction: discord.Interaction):
-    try:
-        await interaction.response.defer(ephemeral=True)
-    except Exception as e:
-        logger.error(f"Failed to defer /rmall: {e}")
+    if not await safe_defer(interaction, thinking=True):
         return
 
     logger.info(f"ACTION: /rmall | User: {interaction.user}")
@@ -1158,7 +1162,7 @@ async def balance(interaction: discord.Interaction):
 # --------- /netstat ---------
 @bot.tree.command(name="netstat", description="Show all recognized devices and their usage")
 async def netstat(interaction: discord.Interaction):
-    if not await safe_defer(interaction):
+    if not await safe_defer(interaction, thinking=True):
         return
 
     logger.info(f"Full network status requested by {interaction.user}")
@@ -1254,7 +1258,7 @@ async def netstat(interaction: discord.Interaction):
 async def set_limit(interaction: discord.Interaction, limit: float):
     global THRESHOLD
     
-    if not await safe_defer(interaction):
+    if not await safe_defer(interaction, thinking=True):
         return
 
     try:
@@ -1344,7 +1348,7 @@ bot.tree.add_command(purge_group)
 # --------- /botstatus ---------
 @bot.tree.command(name="botstatus", description="Check core system services status")
 async def botstatus(interaction: discord.Interaction):
-    if not await safe_defer(interaction):
+    if not await safe_defer(interaction, thinking=True):
         return
 
     async with ROUTER_LOCK:
