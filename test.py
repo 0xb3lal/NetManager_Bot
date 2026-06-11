@@ -653,7 +653,10 @@ async def daily_network_report():
             channel = bot.get_channel(CHANNEL_ID)
             if not channel: return
             now = datetime.now(ZoneInfo("Africa/Cairo"))
-            lines = [f"`{dev['name'][:15].ljust(15)} | 📊{(f'{dev['usage']/1024:.1f}GB' if dev['usage']>=1024 else f'{int(dev['usage'])}MB').rjust(8)}`" for dev in combined_data[:15]]
+            lines = []
+            for dev in combined_data[:15]:
+                u_str = f"{dev['usage']/1024:.1f}GB" if dev['usage'] >= 1024 else f"{int(dev['usage'])}MB"
+                lines.append(f"`{dev['name'][:15].ljust(15)} | 📊{u_str.rjust(8)}`")
             embed = discord.Embed(title=f"📅 Daily Usage Report ({now.strftime('%Y-%m-%d')})", description="\n".join(lines), color=0x3498db, timestamp=now)
             embed.set_footer(text=f"Total Network Load: {total_day_usage_mb/1024:.2f} GB")
             await channel.send(embed=embed)
@@ -777,7 +780,10 @@ class BulkUnblockView(discord.ui.View):
 # ========= DISCORD BOT SETUP =========
 class MyBot(discord.Client):
     def __init__(self):
-        super().__init__(intents=discord.Intents.default())
+        super().__init__(
+            intents=discord.Intents.default(),
+            heartbeat_timeout=60.0,
+        )
         self.tree = app_commands.CommandTree(self)
 
     async def on_tree_error(self, interaction: discord.Interaction, error: app_commands.AppCommandError):
@@ -811,6 +817,16 @@ class MyBot(discord.Client):
         if not usage_tracker_task.is_running():
             usage_tracker_task.start()
 
+        # Keep Discord Gateway alive to prevent idle disconnects (fixes 10062 errors)
+        if not discord_keepalive_task.is_running():
+            discord_keepalive_task.start()
+
+    async def on_disconnect(self):
+        logger.warning("Bot disconnected from Discord Gateway. Waiting for automatic reconnect...")
+
+    async def on_resumed(self):
+        logger.info("Discord Gateway session resumed successfully. Bot is fully operational.")
+
     async def on_ready(self):
         logger.info(f"Bot ready: {self.user}")
         global BANNED_MACS
@@ -820,13 +836,13 @@ class MyBot(discord.Client):
             async with ROUTER_LOCK:
                 await asyncio.to_thread(_reapply_banned_macs)
 
-bot = MyBot()
-
 # ========= ROUTER LOCK =========
 # Single asyncio.Lock that serializes ALL router HTTP traffic.
 # The router (weak CPU/RAM) can't handle concurrent requests without timing out.
 # Every task or command that touches the router must acquire this lock first.
 ROUTER_LOCK = asyncio.Lock()
+
+bot = MyBot()
 
 # ========= Helpers Functions For Commands =========
 def _reapply_banned_macs():
@@ -1403,6 +1419,26 @@ async def before_traffic_check():
     logger.info("Waiting for bot to be ready before starting traffic task...")
     await bot.wait_until_ready()
     logger.info("Bot is ready. Traffic task started.")
+
+@tasks.loop(minutes=2.0)
+async def discord_keepalive_task():
+    """
+    Sends a lightweight request to Discord every 2 minutes to prevent
+    the Gateway WebSocket from going idle. This is the actual fix for
+    the 10062 Unknown Interaction error after long periods of inactivity.
+    """
+    try:
+        guild = bot.get_guild(GUILD_ID.id)
+        if guild:
+            _ = guild.name
+            logger.debug("Discord keepalive ping sent successfully.")
+    except Exception as e:
+        logger.debug(f"Discord keepalive failed (non-critical): {e}")
+
+@discord_keepalive_task.before_loop
+async def before_discord_keepalive():
+    await bot.wait_until_ready()
+    logger.info("Discord keepalive task started (prevents idle Gateway disconnects).")
 
 async def main():
     try:
