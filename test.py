@@ -463,20 +463,15 @@ def get_speed_history():
     }
 
     try:
-        # Warm-up request: short timeout so we don't block the lock for 15s.
-        # The heartbeat_task already keeps the session warm, so failure here is fine.
-        try:
-            router.get(f"{ROUTER_URL}/", timeout=3)
-        except Exception:
-            logger.debug("Speed history warm-up skipped (router busy), proceeding anyway.")
-
+        # Skip warm-up entirely — heartbeat_task keeps the session warm.
+        # Total budget: 3s (init) + 7s (data) = 10s max inside the lock.
         url = f"{ROUTER_URL}/update.cgi"
-        
+
         init_data = "exec=ipt_bandwidth&arg0=start&_http_id=TIDe5b1505eeac7f67f"
-        router.post(url, headers=headers, data=init_data, timeout=5)
+        router.post(url, headers=headers, data=init_data, timeout=3)
 
         data_payload = "exec=ipt_bandwidth&arg0=speed&_http_id=TIDe5b1505eeac7f67f"
-        r = router.post(url, headers=headers, data=data_payload, timeout=10)
+        r = router.post(url, headers=headers, data=data_payload, timeout=7)
         
         match = re.search(r"speed_history\s*=\s*(\{.*?\});", r.text, re.DOTALL)
         if not match:
@@ -503,7 +498,7 @@ def get_dhcp_mapping():
         "Origin": ROUTER_URL
     }
     try:
-        r = router.post(url, headers=headers, data=data, timeout=10)
+        r = router.post(url, headers=headers, data=data, timeout=7)
         match = re.search(r"dhcpd_lease\s*=\s*(\[.*?\]);", r.text, re.DOTALL)
         if not match:
             logger.warning("dhcpd_lease block not found in router response.")
@@ -570,7 +565,7 @@ def _fetch_devlist():
         "Referer": ROUTER_URL + "/",
         "Origin": ROUTER_URL
     }
-    r = router.post(url, headers=headers, data=data, timeout=10)
+    r = router.post(url, headers=headers, data=data, timeout=7)
     dhcp_leases = demjson3.decode(re.search(r"dhcpd_lease\s*=\s*(\[.*?\]);", r.text).group(1))
     wireless_devs = demjson3.decode(re.search(r"wldev\s*=\s*(\[.*?\]);", r.text).group(1))
     return dhcp_leases, wireless_devs
@@ -1097,8 +1092,13 @@ async def netstat(interaction: discord.Interaction):
     
     try:
         async with ROUTER_LOCK:
-            speed_history = await asyncio.to_thread(get_speed_history)
-            dhcp_leases, wireless_devs = await asyncio.to_thread(_fetch_devlist)
+            # Run both router fetches concurrently — same lock, parallel threads.
+            # Max wait = slowest of the two (≈10s) instead of sum (≈17s).
+            speed_future = asyncio.to_thread(get_speed_history)
+            devlist_future = asyncio.to_thread(_fetch_devlist)
+            speed_history, (dhcp_leases, wireless_devs) = await asyncio.gather(
+                speed_future, devlist_future
+            )
 
         active_signals = {dev[1].upper(): dev[2] for dev in wireless_devs}
         devices_info = {lease[2].upper(): {"name": lease[0], "ip": lease[1]} for lease in dhcp_leases}
