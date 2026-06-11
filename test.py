@@ -3,10 +3,6 @@ import re
 import json
 import hmac
 import copy
-import glob
-import gzip
-import struct
-import socket
 import urllib3
 import hashlib
 import logging
@@ -25,19 +21,17 @@ from requests.exceptions import ReadTimeout, ConnectionError
 
 # ========= CONFIG =========
 load_dotenv()
-D_USERNAME = os.getenv("D_USERNAME")
-D_PASSWORD = os.getenv("D_PASSWORD")
+D_USERNAME = os.getenv("D_USERNAME")         # Dashboard Username (radiusmanager/user.php)
+D_PASSWORD = os.getenv("D_PASSWORD")         # Dashboard Password (radiusmanager/user.php)
 ROUTER_URL = os.getenv("ROUTER_URL")
 ROUTER_AUTH = (os.getenv("ROUTER_USER"), os.getenv("ROUTER_PASS"))
 THRESHOLD = 3.0
 BANNED_MACS = set()
 DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
-GUILD_ID = discord.Object(id=1475047474832867338)
+GUILD_ID = discord.Object(id=1475047474832867338) 
 CHANNEL_ID = int(os.getenv("CHANNEL_ID")) if os.getenv("CHANNEL_ID") else 0
 CONFIG_FILE = "settings.conf"
 BANNED_MACS_FILE = "bannedDevices.json"
-DAILY_SNAPSHOT_FILE = "daily_snapshot.json"
-CIFS2_PATH = "/cifs2"
 ALLOWED_MACS = [
     "4C:20:B8:87:12:E2",
     "F8:34:41:DA:93:EB",
@@ -53,8 +47,7 @@ MACS_LIST = {
     "32:AC:87:47:17:5D": "Fedora",
     "D6:62:9E:2B:31:3D": "Yousef"
 }
-
-# ========= LOGGING SYS =========
+# ========= LOGING SYS =========
 log_dir = "logs"
 if not os.path.exists(log_dir):
     os.makedirs(log_dir)
@@ -63,11 +56,11 @@ log_path = os.path.join(log_dir, "bot.log")
 
 class ColorFormatter(logging.Formatter):
     COLORS = {
-        "DEBUG": "\033[36m",
-        "INFO": "\033[34m",
-        "WARNING": "\033[33m",
-        "ERROR": "\033[31m",
-        "CRITICAL": "\033[41m",
+        "DEBUG": "\033[36m",     # Cyan
+        "INFO": "\033[34m",      # Blue
+        "WARNING": "\033[33m",   # Yellow
+        "ERROR": "\033[31m",     # Red
+        "CRITICAL": "\033[41m",  # Red background
     }
     RESET = "\033[0m"
 
@@ -83,7 +76,7 @@ handler = RotatingFileHandler(
     maxBytes=5*1024*1024,
     backupCount=1,
     encoding='utf-8',
-    mode='w'
+    mode='w' 
 )
 console_handler = logging.StreamHandler()
 formatter = logging.Formatter(
@@ -110,10 +103,11 @@ def hex_hmac_md5(key, data):
     return hmac.new(key.encode(), data.encode(), hashlib.md5).hexdigest()
 
 # ========= ROUTER EXEC =========
-def run_cmd(router, headers, cmd):
+def run_cmd(router, headers, cmd, _retry=True):
     data = f"action=execute&command={cmd}\n&_http_id=TIDe5b1505eeac7f67f"
     try:
         logger.debug(f"Sending Command to Router: {cmd}")
+        
         response = router.post(
             f"{ROUTER_URL}/shell.cgi",
             headers=headers,
@@ -123,9 +117,12 @@ def run_cmd(router, headers, cmd):
         if response.status_code == 200:
             logger.debug(f"Router executed: {cmd} successfully.")
         else:
-            logger.error(f"Router returned error code {response.status_code} for command: {cmd}")
+            logger.error(f"Router returned error code {response.status_code} for command: {cmd}")    
     except (ReadTimeout, ConnectionError) as e:
         logger.error(f"Router Connection Error while executing '{cmd}': {e}")
+        if _retry:
+            logger.warning(f"Retrying command once: {cmd}")
+            run_cmd(router, headers, cmd, _retry=False)
     except Exception as e:
         logger.error(f"Unexpected error in run_cmd: {e}")
 
@@ -139,7 +136,7 @@ def load_threshold():
                         return float(line.split("=")[1].strip())
     except Exception as e:
         logger.error(f"Error loading config: {e}")
-    return 3.0
+    return 3.0  
 
 def save_threshold(value):
     try:
@@ -168,6 +165,22 @@ def load_banned_macs():
         logger.error(f"Error loading banned MACs: {e}")
     return set()
 
+def _router_heartbeat():
+    try:
+        router = requests.Session()
+        router.auth = ROUTER_AUTH
+        router.verify = False
+        headers = {
+            "Referer": f"{ROUTER_URL}/",
+            "User-Agent": "Mozilla/5.0",
+        }
+        # Lightweight no-op command just to keep the router's shell.cgi
+        # session warm and responsive (avoids the "first command fails" issue)
+        run_cmd(router, headers, "true", _retry=False)
+        logger.debug("Router heartbeat sent successfully.")
+    except Exception as e:
+        logger.error(f"Router heartbeat failed: {e}")
+
 # ========= ONLINE DEVICES HELPER =========
 def get_router_devices_raw():
     router = requests.Session()
@@ -179,6 +192,7 @@ def get_router_devices_raw():
             "User-Agent": "Mozilla/5.0",
             "Accept": "text/html,application/xhtml+xml,xml;q=0.9,*/*;q=0.8"
         }
+        
         response = router.get(url, headers=headers, timeout=10)
         if response.status_code == 200:
             return response.text
@@ -197,7 +211,7 @@ def clear_lockdown(router, headers):
 def enable_lockdown(router, headers, force_lock=False):
     mode = "FORCE (Whitelist only)" if force_lock else "NORMAL (Banning list)"
     logger.info(f"Applying Firewall Lockdown: Mode={mode}")
-
+    
     run_cmd(router, headers, "iptables -F LOCKDOWN 2>/dev/null")
     run_cmd(router, headers, "iptables -X LOCKDOWN 2>/dev/null")
     run_cmd(router, headers, "iptables -N LOCKDOWN 2>/dev/null")
@@ -257,9 +271,8 @@ def check_and_lock(bot_instance):
                 available_traffic = td.find_next_sibling("td").get_text(strip=True)
                 break
 
-        if not available_traffic:
-            return
-
+        if not available_traffic: return
+        
         traffic_value = float(available_traffic.split()[0])
         router = requests.Session()
         router.auth = ROUTER_AUTH
@@ -273,8 +286,8 @@ def check_and_lock(bot_instance):
             e_title, e_color = "`✅` System Normal", 0x47ff7e
 
         balance_label = "Balance:".ljust(9)
-        limit_label = "Limit:".ljust(9)
-
+        limit_label   = "Limit:".ljust(9)
+        
         status_box = (
             f"```\n"
             f"{balance_label} {available_traffic}\n"
@@ -285,8 +298,7 @@ def check_and_lock(bot_instance):
             title=e_title,
             description=status_box,
             color=e_color
-        )
-
+        )   
         async def safe_send():
             try:
                 channel = bot_instance.get_channel(CHANNEL_ID)
@@ -297,17 +309,17 @@ def check_and_lock(bot_instance):
 
         if bot_instance.loop.is_running():
             bot_instance.loop.create_task(safe_send())
-
+                
     except Exception as e:
         logger.error(f"Main Check Error: {e}")
 
-# ========= GET BALANCE ONLY =========
+# ========= Get Balance Only =========
 def get_balance():
     session = requests.Session()
     md5_password = hex_md5(D_PASSWORD)
     md5_final = hex_hmac_md5(D_USERNAME, md5_password)
     payload = {"username": D_USERNAME, "md5": md5_final, "Submit": "Submit"}
-
+    
     try:
         login_url = "http://10.0.0.254/radiusmanager/user.php?cont=login"
         response = session.post(login_url, data=payload, timeout=10)
@@ -322,7 +334,7 @@ def get_balance():
                 balance = td.find_next_sibling("td").get_text(strip=True)
                 logger.info(f"Successfully fetched balance: {balance}")
                 return balance
-
+        
         logger.warning("Balance field 'Available total traffic' not found in dashboard HTML.")
         return None
 
@@ -332,125 +344,51 @@ def get_balance():
         logger.error("Connection Error: Could not connect to 10.0.0.254. Is the server down?")
     except Exception as e:
         logger.error(f"Unexpected error in get_balance: {e}")
-
+    
     return None
 
 # ========= NETWORK USAGE HELPERS =========
-urllib3.disable_warnings()
-
+urllib3.disable_warnings() # Disable SSL/Insecure connection warnings in console
 def bytes_to_mb(value):
     return value / (1024 * 1024)
 
-def _parse_cstats(filepath):
-    result = {}
-    try:
-        with gzip.open(filepath, 'rb') as f:
-            raw = f.read()
+def get_speed_history():
+    router = requests.Session()
+    router.auth = ROUTER_AUTH
+    router.verify = False
 
-        record_size = 36
-        num_records = len(raw) // record_size
-
-        for i in range(num_records):
-            offset = i * record_size
-            chunk = raw[offset:offset + record_size]
-            if len(chunk) < record_size:
-                break
-
-            ip_int, tx_total, tx_today, rx_total, rx_today = struct.unpack(">IQQQQ", chunk)
-
-            if ip_int == 0:
-                continue
-
-            ip_str = socket.inet_ntoa(struct.pack(">I", ip_int))
-
-            if not ip_str.startswith("192.168.1."):
-                continue
-
-            result[ip_str] = {
-                "rx_total": rx_total,
-                "tx_total": tx_total,
-            }
-            logger.debug(f"cstats: {ip_str} RX={bytes_to_mb(rx_total):.1f}MB TX={bytes_to_mb(tx_total):.1f}MB")
-
-        logger.info(f"Parsed {len(result)} IP records from cstats.")
-        return result
-
-    except struct.error as e:
-        logger.error(f"Struct parse error in cstats (wrong format?): {e}")
-        return {}
-    except Exception as e:
-        logger.error(f"Error parsing cstats: {e}")
-        return {}
-
-def get_speed_history_from_cifs():
-    try:
-        cstats_pattern = os.path.join(CIFS2_PATH, "tomato_cstats_*.gz")
-        cstats_files = glob.glob(cstats_pattern)
-
-        if not cstats_files:
-            logger.warning(f"No tomato_cstats file found in {CIFS2_PATH}")
-            return {}
-
-        cstats_file = cstats_files[0]
-        logger.info(f"Reading IP traffic history from: {cstats_file}")
-        return _parse_cstats(cstats_file)
-
-    except Exception as e:
-        logger.error(f"Error reading CIFS2 cstats: {e}")
-        return {}
-
-# ========= DAILY SNAPSHOT HELPERS =========
-def save_daily_snapshot(speed_history: dict):
-    snapshot = {
-        "date": datetime.now(ZoneInfo("Africa/Cairo")).strftime("%Y-%m-%d"),
-        "data": {
-            ip: {
-                "rx": entry.get("rx_total", 0),
-                "tx": entry.get("tx_total", 0)
-            }
-            for ip, entry in speed_history.items()
-        }
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+        "Accept": "*/*",
+        "Origin": ROUTER_URL,
+        "Referer": f"{ROUTER_URL}/bwm-realtime.asp",
+        "X-Requested-With": "XMLHttpRequest"
     }
+
     try:
-        with open(DAILY_SNAPSHOT_FILE, "w") as f:
-            json.dump(snapshot, f)
-        logger.info(f"Daily snapshot saved for {snapshot['date']} ({len(snapshot['data'])} IPs)")
+        router.get(f"{ROUTER_URL}/", timeout=15)
+        
+        url = f"{ROUTER_URL}/update.cgi"
+        
+        init_data = "exec=ipt_bandwidth&arg0=start&_http_id=TIDe5b1505eeac7f67f"
+        router.post(url, headers=headers, data=init_data, timeout=5)
+
+        data_payload = "exec=ipt_bandwidth&arg0=speed&_http_id=TIDe5b1505eeac7f67f"
+        r = router.post(url, headers=headers, data=data_payload, timeout=10)
+        
+        match = re.search(r"speed_history\s*=\s*(\{.*?\});", r.text, re.DOTALL)
+        if not match:
+            logger.warning("speed_history block not found in router response.")
+            return {}
+            
+        return demjson3.decode(match.group(1))
+        
     except Exception as e:
-        logger.error(f"Error saving snapshot: {e}")
-
-def load_daily_snapshot() -> dict:
-    try:
-        if os.path.exists(DAILY_SNAPSHOT_FILE):
-            with open(DAILY_SNAPSHOT_FILE, "r") as f:
-                return json.load(f)
-    except Exception as e:
-        logger.error(f"Error loading snapshot: {e}")
-    return {"date": None, "data": {}}
-
-def get_today_usage(speed_history: dict) -> dict:
-    snapshot = load_daily_snapshot()
-    baseline = snapshot.get("data", {})
-    today_usage = {}
-
-    for ip, entry in speed_history.items():
-        current_rx = entry.get("rx_total", 0)
-        current_tx = entry.get("tx_total", 0)
-
-        base_rx = baseline.get(ip, {}).get("rx", 0)
-        base_tx = baseline.get(ip, {}).get("tx", 0)
-
-        rx_today = max(current_rx - base_rx, 0)
-        tx_today = max(current_tx - base_tx, 0)
-
-        if rx_today + tx_today > 0:
-            today_usage[ip] = {
-                "rx_total": rx_today,
-                "tx_total": tx_today
-            }
-
-    return today_usage
+        logger.error(f"Error fetching speed history: {e}")
+        return {}
 
 def get_dhcp_mapping():
+    """Return dict mapping IP -> (device name, MAC) from DHCP leases"""
     router = requests.Session()
     router.auth = ROUTER_AUTH
     router.verify = False
@@ -463,7 +401,7 @@ def get_dhcp_mapping():
         "Origin": ROUTER_URL
     }
     try:
-        r = requests.Session().post(url, headers=headers, data=data, timeout=10)
+        r = router.post(url, headers=headers, data=data, timeout=10)
         match = re.search(r"dhcpd_lease\s*=\s*(\[.*?\]);", r.text, re.DOTALL)
         if not match:
             logger.warning("dhcpd_lease block not found in router response.")
@@ -471,6 +409,7 @@ def get_dhcp_mapping():
         leases = demjson3.decode(match.group(1))
         mapping = {}
         for lease in leases:
+            # lease = [name, ip, mac, lease_time]
             name, ip, mac = lease[0], lease[1], lease[2]
             mapping[ip] = (name, mac.upper())
         return mapping
@@ -478,11 +417,12 @@ def get_dhcp_mapping():
         logger.error(f"Error fetching DHCP mapping: {e}")
         return {}
 
-# ========= STATUS OF SERVICES HELPER =========
+# ========= STATUS OF SERVICES HELPER ========= 
 def check_bot_services():
     status = {}
 
     try:
+    # 1. JFFS2 Check
         router = requests.Session()
         router.auth = ROUTER_AUTH
         headers = {
@@ -496,16 +436,18 @@ def check_bot_services():
             data=data,
             timeout=5
         )
-        status['cifs'] = "ONLINE" if "/cifs2" in r.text else "OFFLINE"
+        status['jffs2'] = "ONLINE" if "/jffs" in r.text else "OFFLINE"
     except:
-        status['cifs'] = "TIMEOUT"
+        status['jffs2'] = "TIMEOUT"
 
+    # 2. Radius Dashboard
     try:
         r = requests.get("http://10.0.0.254/radiusmanager/user.php", timeout=3)
         status['radius'] = "READY" if r.status_code == 200 else "DOWN"
     except:
         status['radius'] = "DOWN"
 
+    # 3. Router Connectivity
     try:
         r = requests.get(ROUTER_URL, auth=ROUTER_AUTH, timeout=3)
         status['link'] = "OK" if r.status_code == 200 else "AUTH_ERR"
@@ -514,7 +456,7 @@ def check_bot_services():
 
     return status
 
-# ========= HELPER: FETCH DEVLIST FROM ROUTER IN A THREAD =========
+# ========= Helper: fetch devlist from router in a thread =========
 def _fetch_devlist():
     router = requests.Session()
     router.auth = ROUTER_AUTH
@@ -531,35 +473,31 @@ def _fetch_devlist():
     wireless_devs = demjson3.decode(re.search(r"wldev\s*=\s*(\[.*?\]);", r.text).group(1))
     return dhcp_leases, wireless_devs
 
-# ========= DAILY REPORT TASK =========
+# ========= DAILY REPORT HELPER ========= 
 REPORT_TIME = time(hour=23, minute=59, tzinfo=ZoneInfo("Africa/Cairo"))
 
 @tasks.loop(time=REPORT_TIME)
 async def daily_network_report():
     try:
-        raw_history = await asyncio.to_thread(get_speed_history_from_cifs)
-        speed_history = get_today_usage(raw_history)
-
+        speed_history = await asyncio.to_thread(get_speed_history)
         router = requests.Session()
         router.auth = ROUTER_AUTH
         router.verify = False
         url = f"{ROUTER_URL}/update.cgi"
-        req_data = "exec=devlist&_http_id=TIDe5b1505eeac7f67f"
-        r = await asyncio.to_thread(router.post, url, data=req_data, timeout=10)
+        data = "exec=devlist&_http_id=TIDe5b1505eeac7f67f"
+        r = await asyncio.to_thread(router.post, url, data=data, timeout=10)
         dhcp_leases = demjson3.decode(re.search(r"dhcpd_lease\s*=\s*(\[.*?\]);", r.text).group(1))
         devices_info = {lease[2].upper(): {"name": lease[0], "ip": lease[1]} for lease in dhcp_leases}
-
+        
         combined_data = []
         total_day_usage_mb = 0.0
 
         for ip, data in speed_history.items():
-            if not ip or ip.startswith("_") or ip.endswith(".0"):
-                continue
-            rx = data.get("rx_total", 0)
-            tx = data.get("tx_total", 0)
+            if not ip or ip.startswith("_") or ip.endswith(".0"): continue
+            rx = data.get("rx_total", 0) if isinstance(data, dict) else data
+            tx = data.get("tx_total", 0) if isinstance(data, dict) else 0
             usage_mb = bytes_to_mb(rx + tx)
-            if usage_mb < 0.1:
-                continue
+            if usage_mb < 0.1: continue
             total_day_usage_mb += usage_mb
 
             target_mac = next((mac for mac, info in devices_info.items() if info['ip'] == ip), None)
@@ -570,20 +508,12 @@ async def daily_network_report():
         combined_data.sort(key=lambda x: x['usage'], reverse=True)
         if combined_data:
             channel = bot.get_channel(CHANNEL_ID)
-            if not channel:
-                return
+            if not channel: return
             now = datetime.now(ZoneInfo("Africa/Cairo"))
-            lines = []
-            for dev in combined_data[:15]:
-                u_str = f"{dev['usage']/1024:.1f}GB" if dev['usage'] >= 1024 else f"{int(dev['usage'])}MB"
-                lines.append(f"`{dev['name'][:15].ljust(15)} | 📊{u_str.rjust(8)}`")
-            embed = discord.Embed(
-                title=f"📅 Daily Usage Report ({now.strftime('%Y-%m-%d')})",
-                description="\n".join(lines),
-                color=0x3498db,
-                timestamp=now
-            )
+            lines = [f"`{dev['name'][:15].ljust(15)} | 📊{(f'{dev['usage']/1024:.1f}GB' if dev['usage']>=1024 else f'{int(dev['usage'])}MB').rjust(8)}`" for dev in combined_data[:15]]
+            embed = discord.Embed(title=f"📅 Daily Usage Report ({now.strftime('%Y-%m-%d')})", description="\n".join(lines), color=0x3498db, timestamp=now)
             embed.set_footer(text=f"Total Network Load: {total_day_usage_mb/1024:.2f} GB")
+            logger.info("Daily network report sent successfully")
             await channel.send(embed=embed)
     except Exception as e:
         logger.error(f"Error in daily_network_report: {e}")
@@ -592,26 +522,7 @@ async def daily_network_report():
 async def before_daily_report():
     await bot.wait_until_ready()
 
-# ========= MIDNIGHT SNAPSHOT TASK =========
-MIDNIGHT = time(hour=0, minute=0, tzinfo=ZoneInfo("Africa/Cairo"))
-
-@tasks.loop(time=MIDNIGHT)
-async def midnight_snapshot_task():
-    try:
-        speed_history = await asyncio.to_thread(get_speed_history_from_cifs)
-        if speed_history:
-            save_daily_snapshot(speed_history)
-            logger.info("Midnight snapshot taken successfully.")
-        else:
-            logger.warning("Midnight snapshot skipped — no data from CIFS2.")
-    except Exception as e:
-        logger.error(f"Error in midnight snapshot task: {e}")
-
-@midnight_snapshot_task.before_loop
-async def before_midnight_snapshot():
-    await bot.wait_until_ready()
-
-# ========= BLOCKALL SETUP =========
+# ========= BlockAll SETUP =========
 class BulkBlockSelect(discord.ui.Select):
     def __init__(self, options):
         super().__init__(
@@ -631,11 +542,11 @@ class BulkBlockSelect(discord.ui.Select):
         router = requests.Session()
         router.auth = ROUTER_AUTH
         headers = {
-            "Content-Type": "text/plain;charset=UTF-8",
-            "Referer": f"{ROUTER_URL}/",
+            "Content-Type": "text/plain;charset=UTF-8", 
+            "Referer": f"{ROUTER_URL}/", 
             "Origin": ROUTER_URL
         }
-
+        
         selected_macs = self.values
         success_list = await asyncio.to_thread(
             lambda: [
@@ -648,7 +559,7 @@ class BulkBlockSelect(discord.ui.Select):
         for i, m in enumerate(BANNED_MACS, 1):
             name = MACS_LIST.get(m, 'Unknown Device')
             lines.append(f"{i:02d}. {name}")
-
+        
         current_list = "```\n" + "\n".join(lines) + "```" if lines else "No devices currently banned"
 
         embed = discord.Embed(
@@ -657,15 +568,15 @@ class BulkBlockSelect(discord.ui.Select):
             color=0xff4747
         )
         embed.add_field(name="`📝` Updated Banned List", value=current_list, inline=False)
-
+        
         await interaction.followup.send(embed=embed)
 
 class BulkBlockView(discord.ui.View):
     def __init__(self, options):
-        super().__init__(timeout=180)
+        super().__init__(timeout=60)
         self.add_item(BulkBlockSelect(options))
 
-# ========= REMOVEALL SETUP =========
+# ========= RemoveAll SETUP =========
 class BulkUnblockSelect(discord.ui.Select):
     def __init__(self, options):
         super().__init__(
@@ -685,11 +596,11 @@ class BulkUnblockSelect(discord.ui.Select):
         router = requests.Session()
         router.auth = ROUTER_AUTH
         headers = {
-            "Content-Type": "text/plain;charset=UTF-8",
-            "Referer": f"{ROUTER_URL}/",
+            "Content-Type": "text/plain;charset=UTF-8", 
+            "Referer": f"{ROUTER_URL}/", 
             "Origin": ROUTER_URL
         }
-
+        
         selected_macs = self.values
         success_list = await asyncio.to_thread(
             lambda: [
@@ -702,7 +613,7 @@ class BulkUnblockSelect(discord.ui.Select):
         for i, m in enumerate(BANNED_MACS, 1):
             name = MACS_LIST.get(m, 'Unknown Device')
             lines.append(f"{i:02d}. {name}")
-
+        
         current_list = "```\n" + "\n".join(lines) + "```" if lines else "No devices currently banned"
 
         embed = discord.Embed(
@@ -711,41 +622,35 @@ class BulkUnblockSelect(discord.ui.Select):
             color=0x47ff47
         )
         embed.add_field(name="`📝` Remaining Banned List", value=current_list, inline=False)
-
+        
         await interaction.followup.send(embed=embed)
 
 class BulkUnblockView(discord.ui.View):
     def __init__(self, options):
-        super().__init__(timeout=180)
+        super().__init__(timeout=60)
         self.add_item(BulkUnblockSelect(options))
 
 # ========= DISCORD BOT SETUP =========
 class MyBot(discord.Client):
     def __init__(self):
-        super().__init__(intents=discord.Intents.default(), heartbeat_timeout=150.0)
+        super().__init__(intents=discord.Intents.default())
         self.tree = app_commands.CommandTree(self)
 
     async def setup_hook(self):
         self.tree.copy_global_to(guild=GUILD_ID)
         await self.tree.sync(guild=GUILD_ID)
 
+        # Start existing traffic check
         if not traffic_check_task.is_running():
             traffic_check_task.start()
 
+        # START THE DAILY REPORT TASK HERE
         if not daily_network_report.is_running():
             daily_network_report.start()
 
-        if not midnight_snapshot_task.is_running():
-            midnight_snapshot_task.start()
-
-    async def on_connect(self):
-        logger.info("Bot connected to Discord gateway.")
-
-    async def on_disconnect(self):
-        logger.warning("Bot disconnected from Discord. Waiting to reconnect...")
-
-    async def on_resumed(self):
-        logger.info("Bot connection resumed successfully.")
+        # Keep router shell session warm to avoid first-command failures
+        if not heartbeat_task.is_running():
+            heartbeat_task.start()
 
     async def on_ready(self):
         logger.info(f"Bot ready: {self.user}")
@@ -757,7 +662,7 @@ class MyBot(discord.Client):
 
 bot = MyBot()
 
-# ========= HELPER FUNCTIONS FOR COMMANDS =========
+# ========= Helpers Functions For Commands =========
 def _reapply_banned_macs():
     router = requests.Session()
     router.auth = ROUTER_AUTH
@@ -786,7 +691,7 @@ def get_banned_list_text():
         return "\n".join(f"{i+1}- {m} ({MACS_LIST.get(m, 'Unknown')})" for i, m in enumerate(BANNED_MACS))
     return "No MACs banned"
 
-# ========= MAIN COMMANDS =========
+# ========= Main Commands =========
 
 # --------- /blk ---------
 @bot.tree.command(name="blk", description="Ban a MAC address from the list")
@@ -799,22 +704,22 @@ async def ban(interaction: discord.Interaction, mac: str):
         return
 
     logger.info(f"ACTION: /blk | User: {interaction.user} | Target: {mac}")
-
+    
     try:
         mac_upper = mac.upper()
         router = requests.Session()
         router.auth = ROUTER_AUTH
         headers = {"Content-Type": "text/plain;charset=UTF-8", "Referer": ROUTER_URL + "/", "Origin": ROUTER_URL}
-
+        
         await asyncio.to_thread(ban_mac, router, headers, mac_upper)
-
+        
         device_name = MACS_LIST.get(mac_upper, "Unknown Device")
-
+        
         lines = []
         for i, m in enumerate(BANNED_MACS, 1):
             name = MACS_LIST.get(m, 'Unknown Device')
             lines.append(f"{i:02d}. {name}")
-
+        
         current_list = "```\n" + "\n".join(lines) + "```" if lines else "No devices currently banned"
 
         embed = discord.Embed(
@@ -822,6 +727,7 @@ async def ban(interaction: discord.Interaction, mac: str):
             description=f"**Target:** `{device_name}`",
             color=0xff4747
         )
+        
         embed.add_field(
             name="`📝` Updated Banned List",
             value=current_list,
@@ -830,7 +736,7 @@ async def ban(interaction: discord.Interaction, mac: str):
 
         await interaction.followup.send(embed=embed)
         logger.info(f"SUCCESS: {mac_upper} blocked. Total banned: {len(BANNED_MACS)}")
-
+        
     except Exception as e:
         logger.error(f"FAILURE: {e}")
         try:
@@ -849,29 +755,30 @@ async def rm(interaction: discord.Interaction, mac: str):
         return
 
     logger.info(f"ACTION: /rm | User: {interaction.user} | Target MAC: {mac}")
-
+    
     try:
         mac_upper = mac.upper()
         router = requests.Session()
         router.auth = ROUTER_AUTH
-        headers = {"Content-Type": "text/plain;charset=UTF-8", "Referer": ROUTER_URL + "/", "Origin": ROUTER_URL}
-
+        headers = {"Content-Type": "text/plain;charset=UTF-8", "Referer": ROUTER_URL + "/", "Origin": ROUTER_URL} 
+        
         await asyncio.to_thread(unban_mac, router, headers, mac_upper)
-
+        
         device_name = MACS_LIST.get(mac_upper, "Unknown Device")
-
+        
         lines = []
         for i, m in enumerate(BANNED_MACS, 1):
             name = MACS_LIST.get(m, 'Unknown')
             lines.append(f"{i:02d}. {name}")
-
+        
         current_list = "```\n" + "\n".join(lines) + "```" if lines else "✨ *No devices currently banned*"
 
         embed = discord.Embed(
             title="`✅` Device Unblocked",
             description=f"**Target:** `{device_name}`",
-            color=0x2ecc71
+            color=0x2ecc71 
         )
+        
         embed.add_field(
             name="`📝` Updated Banned List",
             value=current_list,
@@ -880,14 +787,13 @@ async def rm(interaction: discord.Interaction, mac: str):
 
         await interaction.followup.send(embed=embed)
         logger.info(f"SUCCESS: {mac_upper} unblocked. New list size: {len(BANNED_MACS)}")
-
+        
     except Exception as e:
         logger.error(f"FAILURE: {e}")
         try:
             await interaction.followup.send("`❌` Router Error: Failed to remove block.")
         except:
             pass
-
 # --------- /blkall ---------
 @bot.tree.command(name="blkall", description="Select multiple saved devices to block")
 async def blkall(interaction: discord.Interaction):
@@ -898,13 +804,15 @@ async def blkall(interaction: discord.Interaction):
         return
 
     logger.info(f"ACTION: /blkall | User: {interaction.user}")
-
+    
     try:
         options = []
         for mac, name in MACS_LIST.items():
             mac_upper = mac.upper()
+            
             if mac_upper in BANNED_MACS:
                 continue
+                
             options.append(discord.SelectOption(
                 label=name,
                 value=mac_upper,
@@ -932,12 +840,13 @@ async def rmall(interaction: discord.Interaction):
         return
 
     logger.info(f"ACTION: /rmall | User: {interaction.user}")
-
+    
     try:
         options = []
         for mac in BANNED_MACS:
             mac_upper = mac.upper()
             display_name = MACS_LIST.get(mac_upper, f"Unknown ({mac_upper})")
+            
             options.append(discord.SelectOption(
                 label=display_name,
                 value=mac_upper,
@@ -979,12 +888,12 @@ async def macs(interaction: discord.Interaction):
         )
 
         await interaction.followup.send(embed=embed)
-
+        
     except Exception as e:
         logger.error(f"Error in /macs command: {e}")
         await interaction.followup.send("`❌` Failed to retrieve the MACs list.")
 
-# --------- /list ---------
+# --------- /list---------
 @bot.tree.command(name="list", description="List currently banned MACs")
 async def list_banned(interaction: discord.Interaction):
     try:
@@ -994,31 +903,32 @@ async def list_banned(interaction: discord.Interaction):
         return
 
     logger.info(f"User {interaction.user} requested the banned MACs list.")
-
+    
     try:
         if BANNED_MACS:
             lines = []
             for i, m in enumerate(BANNED_MACS, 1):
                 device_name = MACS_LIST.get(m, "Unknown Device")
                 lines.append(f"{i:02d}. {device_name}")
-
+            
             banned_output = "```\n" + "\n".join(lines) + "```"
             count = len(BANNED_MACS)
             embed_color = 0xe67e22
         else:
             banned_output = "✨ *No devices are currently under lockdown.*"
-            count = 0
+            count = 0 
             embed_color = 0x95a5a6
 
         embed = discord.Embed(
-            title=f"`🚫` Blocked Devices ({count})",
+            title=f"`🚫` Blockde Devices ({count})",
             description=banned_output,
             color=embed_color
         )
+        
         embed.set_footer(text="Use /rm to unblock a specific device")
         await interaction.followup.send(embed=embed)
         logger.info(f"Sent banned list ({count} devices) to {interaction.user}.")
-
+        
     except Exception as e:
         logger.error(f"Error while listing banned MACs: {e}")
         try:
@@ -1036,17 +946,17 @@ async def balance(interaction: discord.Interaction):
         return
 
     logger.info(f"User {interaction.user} requested balance check.")
-
+    
     try:
         traffic = await asyncio.to_thread(get_balance)
     except Exception as e:
         logger.error(f"Error in get_balance thread: {e}")
         traffic = None
-
+    
     if traffic:
         balance_label = "Current Balance:".ljust(17)
-        limit_label = "System Limit:".ljust(17)
-
+        limit_label   = "System Limit:".ljust(17)
+        
         status_box = (
             f"```\n"
             f"{balance_label} {traffic}\n"
@@ -1054,12 +964,13 @@ async def balance(interaction: discord.Interaction):
             f"```\n"
             f"`💡` *Status is updated automatically every hour.*"
         )
-
+        
         embed = discord.Embed(
             title="`📊` Network Status",
             description=status_box,
             color=0x3498db
         )
+    
         await interaction.followup.send(embed=embed)
         logger.info(f"Balance sent to {interaction.user}: {traffic}")
     else:
@@ -1080,10 +991,9 @@ async def netstat(interaction: discord.Interaction):
         return
 
     logger.info(f"Full network status requested by {interaction.user}")
-
+    
     try:
-        raw_history = await asyncio.to_thread(get_speed_history_from_cifs)
-        speed_history = get_today_usage(raw_history)
+        speed_history = await asyncio.to_thread(get_speed_history)
         dhcp_leases, wireless_devs = await asyncio.to_thread(_fetch_devlist)
 
         active_signals = {dev[1].upper(): dev[2] for dev in wireless_devs}
@@ -1093,29 +1003,27 @@ async def netstat(interaction: discord.Interaction):
         total_traffic_mb = 0.0
 
         for ip, data in speed_history.items():
-            if not ip or ip.startswith("_") or ip.endswith(".0"):
-                continue
-
-            rx = data.get("rx_total", 0)
-            tx = data.get("tx_total", 0)
+            if not ip or ip.startswith("_") or ip.endswith(".0"): continue
+            
+            rx = data.get("rx_total", 0) if isinstance(data, dict) else data
+            tx = data.get("tx_total", 0) if isinstance(data, dict) else 0
             usage_mb = bytes_to_mb(rx + tx)
             total_traffic_mb += usage_mb
 
             target_mac = None
             raw_name = "Unknown"
-
+            
             for mac, info in devices_info.items():
                 if info['ip'] == ip:
                     target_mac = mac
                     raw_name = info['name']
                     break
-
-            if not target_mac:
-                continue
+            
+            if not target_mac: continue
 
             is_online = target_mac in active_signals
             rssi = active_signals.get(target_mac, None)
-
+            
             if is_online and rssi is not None:
                 status_icon = "🟢"
                 quality = min(max(2 * (rssi + 100), 0), 100)
@@ -1138,9 +1046,11 @@ async def netstat(interaction: discord.Interaction):
             lines = []
             for dev in combined_data[:15]:
                 u_str = f"{dev['usage'] / 1024:.1f}GB" if dev['usage'] >= 1024 else f"{int(dev['usage'])}MB"
+                
                 name_f = dev['name'][:12].ljust(12)
                 sig_f = dev['signal'].rjust(4)
                 usage_f = u_str.rjust(6)
+
                 lines.append(f"{dev['icon']} `{name_f} | 📶{sig_f} | 📊{usage_f}`")
 
             embed = discord.Embed(
@@ -1166,7 +1076,7 @@ async def netstat(interaction: discord.Interaction):
 @app_commands.describe(limit="The new threshold value in GB (e.g. 5.0)")
 async def set_limit(interaction: discord.Interaction, limit: float):
     global THRESHOLD
-
+    
     try:
         await interaction.response.defer()
     except Exception as e:
@@ -1176,12 +1086,12 @@ async def set_limit(interaction: discord.Interaction, limit: float):
     try:
         old_limit = THRESHOLD
         THRESHOLD = limit
-
+        
         save_threshold(limit)
         logger.info(f"User {interaction.user} updated THRESHOLD to {limit}")
-
+        
         label_old = "Old Limit:".ljust(14)
-        label_new = "New Limit:".ljust(14)
+        label_new = "New Limit:".ljust(14)        
         status_box = (
             f"```\n"
             f"{label_old} {old_limit} GB\n"
@@ -1189,25 +1099,25 @@ async def set_limit(interaction: discord.Interaction, limit: float):
             f"```\n"
             f"`✅` *Settings updated.*"
         )
-
+        
         embed = discord.Embed(
             title="`⚙️` System Configuration Update",
             description=status_box,
             color=0xf1c40f
         )
-
+        
         await interaction.followup.send(embed=embed)
+        
         await asyncio.to_thread(check_and_lock, bot)
 
     except Exception as e:
         logger.error(f"Error in limit command: {e}")
         await interaction.followup.send("`❌` Failed to update configuration.")
 
-# ========= MANAGE COMMANDS =========
+# ========= Manage commands =========
 
 # --------- /purge user ---------
 purge_group = app_commands.Group(name="purge", description="Commands to delete messages")
-
 @purge_group.command(name="user", description="Delete messages from a specific user")
 @app_commands.describe(user="The user to delete messages for", amount="Number of messages to check")
 async def purge_user(interaction: discord.Interaction, user: discord.Member, amount: int):
@@ -1219,9 +1129,9 @@ async def purge_user(interaction: discord.Interaction, user: discord.Member, amo
     try:
         def is_user(m):
             return m.author == user
-
+        
         deleted = await interaction.channel.purge(limit=amount, check=is_user)
-
+        
         try:
             await interaction.followup.send(f"`✅` Deleted {len(deleted)} messages for {user.display_name}.", ephemeral=True)
         except:
@@ -1241,7 +1151,7 @@ async def purge_any(interaction: discord.Interaction, amount: int):
         await interaction.response.defer(ephemeral=True)
     except Exception as e:
         logger.warning(f"Failed to defer /purge any (ignoring): {e}")
-
+    
     try:
         deleted = await interaction.channel.purge(limit=amount)
         try:
@@ -1267,26 +1177,25 @@ async def botstatus(interaction: discord.Interaction):
         return
 
     health = await asyncio.to_thread(check_bot_services)
-
     def get_status_emoji(status_val):
         status_val = status_val.upper()
         if status_val in ["ONLINE", "READY", "OK"]:
             return "🟢"
         if status_val in ["OFFLINE", "DOWN", "AUTH_ERR"]:
             return "🔴"
-        return "⚪"
+        return "⚪" 
 
     all_ok = all(v in ["ONLINE", "READY", "OK"] for v in health.values())
     embed_color = 0x2ecc71 if all_ok else 0xe74c3c
     title_icon = "✅" if all_ok else "⚠️"
 
-    cifs_line = f"{'CIFS Storage':<14} | {health['cifs']:<8} {get_status_emoji(health['cifs'])}"
+    jffs_line   = f"{'JFFS2 Storage':<14} | {health['jffs2']:<8} {get_status_emoji(health['jffs2'])}"
     radius_line = f"{'Radius Dash':<14} | {health['radius']:<8} {get_status_emoji(health['radius'])}"
-    link_line = f"{'Router Link':<14} | {health['link']:<8} {get_status_emoji(health['link'])}"
+    link_line   = f"{'Router Link':<14} | {health['link']:<8} {get_status_emoji(health['link'])}"
 
     status_box = (
         f"```\n"
-        f"{cifs_line}\n"
+        f"{jffs_line}\n"
         f"{radius_line}\n"
         f"{link_line}\n"
         f"```"
@@ -1297,9 +1206,19 @@ async def botstatus(interaction: discord.Interaction):
         description=status_box,
         color=embed_color
     )
+    
     await interaction.followup.send(embed=embed)
 
 # ========= THREADS =========
+@tasks.loop(seconds=10.0)
+async def heartbeat_task():
+    await asyncio.to_thread(_router_heartbeat)
+
+@heartbeat_task.before_loop
+async def before_heartbeat():
+    await bot.wait_until_ready()
+    logger.info("Router heartbeat started (keeps router shell session warm).")
+
 @tasks.loop(hours=1.0)
 async def traffic_check_task():
     logger.info("Starting scheduled traffic check...")
@@ -1318,7 +1237,7 @@ async def before_traffic_check():
 async def main():
     try:
         async with bot:
-            await bot.start(DISCORD_TOKEN, reconnect=True)
+            await bot.start(DISCORD_TOKEN)
     except asyncio.CancelledError:
         logger.warning("Main coroutine cancelled.")
     except Exception as e:
