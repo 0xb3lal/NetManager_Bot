@@ -48,7 +48,8 @@ MACS_LIST = {
     "4C:20:B8:87:12:E2": "Iphone",
     "F2:72:C9:B8:4B:C7": "Tablet",
     "32:AC:87:47:17:5D": "Fedora",
-    "D6:62:9E:2B:31:3D": "Yousef"
+    "D6:62:9E:2B:31:3D": "Yousef",
+    "A8:6A:86:FE:B7:80": "Redmi-A3"
 }
 # ========= LOGING SYS =========
 log_dir = "logs"
@@ -1423,15 +1424,14 @@ async def before_traffic_check():
 @tasks.loop(minutes=2.0)
 async def discord_keepalive_task():
     """
-    Sends a lightweight request to Discord every 2 minutes to prevent
-    the Gateway WebSocket from going idle. This is the actual fix for
-    the 10062 Unknown Interaction error after long periods of inactivity.
+    Fetches the bot's own user from Discord's REST API every 2 minutes.
+    This is a real HTTP round-trip (not a local cache read) which keeps
+    the underlying connection pool warm and prevents the Gateway WebSocket
+    from going stale — the root cause of 10062 errors after idle periods.
     """
     try:
-        guild = bot.get_guild(GUILD_ID.id)
-        if guild:
-            _ = guild.name
-            logger.debug("Discord keepalive ping sent successfully.")
+        await bot.fetch_user(bot.user.id)
+        logger.debug("Discord keepalive ping sent successfully.")
     except Exception as e:
         logger.debug(f"Discord keepalive failed (non-critical): {e}")
 
