@@ -778,8 +778,7 @@ async def ban(interaction: discord.Interaction, mac: str):
     try:
         await interaction.response.defer()
     except Exception as e:
-        logger.error(f"Failed to defer /blk: {e}")
-        return
+        logger.warning(f"Failed to defer /blk: {e}")
 
     logger.info(f"ACTION: /blk | User: {interaction.user} | Target: {mac}")
     
@@ -829,8 +828,7 @@ async def rm(interaction: discord.Interaction, mac: str):
     try:
         await interaction.response.defer()
     except Exception as e:
-        logger.error(f"Failed to defer /rm: {e}")
-        return
+        logger.warning(f"Failed to defer /rm: {e}")
 
     logger.info(f"ACTION: /rm | User: {interaction.user} | Target MAC: {mac}")
     
@@ -878,8 +876,7 @@ async def blkall(interaction: discord.Interaction):
     try:
         await interaction.response.defer(ephemeral=True)
     except Exception as e:
-        logger.error(f"Failed to defer /blkall: {e}")
-        return
+        logger.warning(f"Failed to defer /blkall: {e}")
 
     logger.info(f"ACTION: /blkall | User: {interaction.user}")
     
@@ -1065,8 +1062,9 @@ async def netstat(interaction: discord.Interaction):
     try:
         await interaction.response.defer()
     except Exception as e:
-        logger.error(f"Failed to defer /netstat: {e}")
-        return
+        # 10062 = Unknown interaction (expired or double-trigger).
+        # Don't return — the followup can still succeed if Discord delivered the interaction late.
+        logger.warning(f"Failed to defer /netstat: {e}")
 
     logger.info(f"Full network status requested by {interaction.user}")
     
@@ -1159,8 +1157,7 @@ async def set_limit(interaction: discord.Interaction, limit: float):
     try:
         await interaction.response.defer()
     except Exception as e:
-        logger.error(f"Failed to defer /limit: {e}")
-        return
+        logger.warning(f"Failed to defer /limit: {e}")
 
     try:
         old_limit = THRESHOLD
@@ -1253,8 +1250,7 @@ async def botstatus(interaction: discord.Interaction):
     try:
         await interaction.response.defer()
     except Exception as e:
-        logger.error(f"Failed to defer /botstatus: {e}")
-        return
+        logger.warning(f"Failed to defer /botstatus: {e}")
 
     async with ROUTER_LOCK:
         health = await asyncio.to_thread(check_bot_services)
