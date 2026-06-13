@@ -26,6 +26,7 @@ load_dotenv()
 D_USERNAME = os.getenv("D_USERNAME")         # Dashboard Username (radiusmanager/user.php)
 D_PASSWORD = os.getenv("D_PASSWORD")         # Dashboard Password (radiusmanager/user.php)
 ROUTER_URL = os.getenv("ROUTER_URL")
+RADIUS_URL = os.getenv("RADIUS_URL")
 ROUTER_AUTH = (os.getenv("ROUTER_USER"), os.getenv("ROUTER_PASS"))
 THRESHOLD = 3.0
 BANNED_MACS = set()
@@ -360,9 +361,9 @@ def _fetch_radius_traffic():
     md5_password = hex_md5(D_PASSWORD)
     md5_final = hex_hmac_md5(D_USERNAME, md5_password)
     payload = {"username": D_USERNAME, "md5": md5_final, "Submit": "Submit"}
-    session.post("http://10.0.0.254/radiusmanager/user.php?cont=login", data=payload, timeout=10)
-    session.get("http://10.0.0.254/radiusmanager/user.php?cont=change_lang&lang=English", timeout=10)
-    dash = session.get("http://10.0.0.254/radiusmanager/user.php", timeout=10)
+    session.post(f"{RADIUS_URL}/radiusmanager/user.php?cont=login", data=payload, timeout=10)
+    session.get(f"{RADIUS_URL}/radiusmanager/user.php?cont=change_lang&lang=English", timeout=10)
+    dash = session.get(f"{RADIUS_URL}/radiusmanager/user.php", timeout=10)
     soup = BeautifulSoup(dash.text, "html.parser")
     for td in soup.find_all("td"):
         if "Available total traffic" in td.get_text(strip=True):
@@ -467,11 +468,11 @@ def get_balance():
     payload = {"username": D_USERNAME, "md5": md5_final, "Submit": "Submit"}
     
     try:
-        login_url = "http://10.0.0.254/radiusmanager/user.php?cont=login"
+        login_url = f"{RADIUS_URL}/radiusmanager/user.php?cont=login"
         response = session.post(login_url, data=payload, timeout=10)
         response.raise_for_status()
-        session.get("http://10.0.0.254/radiusmanager/user.php?cont=change_lang&lang=English", timeout=10)
-        dash = session.get("http://10.0.0.254/radiusmanager/user.php", timeout=10)
+        session.get(f"{RADIUS_URL}/radiusmanager/user.php?cont=change_lang&lang=English", timeout=10)
+        dash = session.get(f"{RADIUS_URL}/radiusmanager/user.php", timeout=10)
         dash.raise_for_status()
         soup = BeautifulSoup(dash.text, "html.parser")
 
@@ -588,7 +589,7 @@ def check_bot_services():
 
     # 2. Radius Dashboard
     try:
-        r = requests.get("http://10.0.0.254/radiusmanager/user.php", timeout=3)
+        r = requests.get(f"{RADIUS_URL}/radiusmanager/user.php", timeout=3)
         status['radius'] = "READY" if r.status_code == 200 else "DOWN"
     except:
         status['radius'] = "DOWN"
