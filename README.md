@@ -82,13 +82,13 @@ This setup allows the bot to run on a remote VPS while managing your local home 
 ### Architecture Overview
 
 ```
-┌─────────────┐      SSH Tunnel       ┌─────────────┐
-│   Home PC   │ ◄──────────────────► │     VPS     │
-│   (Fedora)  │  -R 7080:router:7080 │  (Contabo)  │
-│             │  -R 8080:radius:80    │             │
-│ 192.168.1.1 │                      │ 81.17.98.226│
-│ 10.0.0.254  │                      │  Discord    │
-└─────────────┘                      └─────────────┘
+                    SSH Reverse Tunnel
+    Home PC (Fedora)  <------------------>  VPS (Contabo)
+    +----------------+                     +----------------+
+    |  Router        |   -R 7080           |  Discord Bot   |
+    |  192.168.1.1   |   -R 8080           |  81.17.98.226  |
+    |  10.0.0.254    |                     |                |
+    +----------------+                     +----------------+
 ```
 
 ### Step 1: Generate SSH Keys
