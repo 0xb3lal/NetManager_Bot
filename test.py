@@ -549,7 +549,7 @@ def _fetch_devlist():
         "Referer": ROUTER_URL + "/",
         "Origin": ROUTER_URL
     }
-    r = router.post(url, headers=headers, data=data, timeout=15)
+    r = router.post(url, headers=headers, data=data, timeout=30)
     dhcp_leases = demjson3.decode(re.search(r"dhcpd_lease\s*=\s*(\[.*?\]);", r.text).group(1))
     wireless_devs = demjson3.decode(re.search(r"wldev\s*=\s*(\[.*?\]);", r.text).group(1))
     return dhcp_leases, wireless_devs
@@ -562,13 +562,9 @@ async def daily_network_report():
     try:
         async with ROUTER_LOCK:
             speed_history = await asyncio.to_thread(get_speed_history)
-            router = requests.Session()
-            router.auth = ROUTER_AUTH
-            router.verify = False
-            url = f"{ROUTER_URL}/update.cgi"
-            data = "exec=devlist&_http_id=TIDe5b1505eeac7f67f"
-            r = await asyncio.to_thread(router.post, url, data=data, timeout=30)
-        dhcp_leases = demjson3.decode(re.search(r"dhcpd_lease\s*=\s*(\[.*?\]);", r.text).group(1))
+
+        async with ROUTER_LOCK:
+            dhcp_leases, _ = await asyncio.to_thread(_fetch_devlist)
         devices_info = {lease[2].upper(): {"name": lease[0], "ip": lease[1]} for lease in dhcp_leases}
         
         combined_data = []
@@ -1168,13 +1164,10 @@ async def netstat(interaction: discord.Interaction):
     
     try:
         async with ROUTER_LOCK:
-            # Run both router fetches concurrently — same lock, parallel threads.
-            # Max wait = slowest of the two (≈10s) instead of sum (≈17s).
-            speed_future = asyncio.to_thread(get_speed_history)
-            devlist_future = asyncio.to_thread(_fetch_devlist)
-            speed_history, (dhcp_leases, wireless_devs) = await asyncio.gather(
-                speed_future, devlist_future
-            )
+            speed_history = await asyncio.to_thread(get_speed_history)
+
+        async with ROUTER_LOCK:
+            dhcp_leases, wireless_devs = await asyncio.to_thread(_fetch_devlist)
 
         devices_info = {lease[2].upper(): {"name": lease[0], "ip": lease[1]} for lease in dhcp_leases}
 
@@ -1215,7 +1208,7 @@ async def netstat(interaction: discord.Interaction):
                 name_f = dev['name'][:12].ljust(12)
                 usage_f = u_str.rjust(6)
 
-                lines.append(f"`📊` `{name_f} | 📊{usage_f}`")
+                lines.append(f"`📱` `{name_f} | 📊{usage_f}`")
 
             embed = discord.Embed(
                 title=f"`📡` Network Usage ({len(combined_data)} Devices)",
