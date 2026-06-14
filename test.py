@@ -214,7 +214,7 @@ def _router_heartbeat():
             "User-Agent": "Mozilla/5.0",
         }
         data = "action=execute&command=true\n&_http_id=TIDe5b1505eeac7f67f"
-        router.post(f"{ROUTER_URL}/shell.cgi", headers=headers, data=data, timeout=3)
+        router.post(f"{ROUTER_URL}/shell.cgi", headers=headers, data=data, timeout=10)
         logger.debug("Router heartbeat sent successfully.")
     except (ReadTimeout, ConnectionError):
         logger.debug("Router heartbeat timed out (router busy), skipping.")
@@ -518,10 +518,10 @@ def get_speed_history():
         url = f"{ROUTER_URL}/update.cgi"
 
         init_data = "exec=ipt_bandwidth&arg0=start&_http_id=TIDe5b1505eeac7f67f"
-        router.post(url, headers=headers, data=init_data, timeout=3)
+        router.post(url, headers=headers, data=init_data, timeout=10)
 
         data_payload = "exec=ipt_bandwidth&arg0=speed&_http_id=TIDe5b1505eeac7f67f"
-        r = router.post(url, headers=headers, data=data_payload, timeout=7)
+        r = router.post(url, headers=headers, data=data_payload, timeout=30)
         
         match = re.search(r"speed_history\s*=\s*(\{.*?\});", r.text, re.DOTALL)
         if not match:
@@ -581,7 +581,7 @@ def check_bot_services():
             f"{ROUTER_URL}/shell.cgi",
             headers=headers,
             data=data,
-            timeout=5
+            timeout=10
         )
         status['jffs2'] = "ONLINE" if "/jffs" in r.text else "OFFLINE"
     except:
@@ -633,7 +633,7 @@ async def daily_network_report():
             router.verify = False
             url = f"{ROUTER_URL}/update.cgi"
             data = "exec=devlist&_http_id=TIDe5b1505eeac7f67f"
-            r = await asyncio.to_thread(router.post, url, data=data, timeout=10)
+            r = await asyncio.to_thread(router.post, url, data=data, timeout=30)
         dhcp_leases = demjson3.decode(re.search(r"dhcpd_lease\s*=\s*(\[.*?\]);", r.text).group(1))
         devices_info = {lease[2].upper(): {"name": lease[0], "ip": lease[1]} for lease in dhcp_leases}
         
@@ -1397,7 +1397,7 @@ async def before_usage_tracker():
     await bot.wait_until_ready()
     logger.info("Usage tracker started (persists traffic counters across router reboots).")
 
-@tasks.loop(seconds=30.0)
+@tasks.loop(minutes=1.0)
 async def heartbeat_task():
     # Skip if router is already busy — heartbeat is just a keepalive, not critical
     if ROUTER_LOCK.locked():
