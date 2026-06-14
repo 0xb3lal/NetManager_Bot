@@ -1,5 +1,3 @@
-# test for offset + raw iptables
-
 import os
 import re
 import json
@@ -146,7 +144,7 @@ def run_cmd(router, headers, cmd, _retry=True):
             f"{ROUTER_URL}/shell.cgi",
             headers=headers,
             data=data,
-            timeout=10
+            timeout=30
         )
         if response.status_code == 200:
             logger.debug(f"Router executed: {cmd} successfully.")
@@ -295,7 +293,7 @@ def get_router_devices_raw():
             "Accept": "text/html,application/xhtml+xml,xml;q=0.9,*/*;q=0.8"
         }
         
-        response = router.get(url, headers=headers, timeout=10)
+        response = router.get(url, headers=headers, timeout=15)
         if response.status_code == 200:
             return response.text
         return ""
@@ -361,9 +359,9 @@ def _fetch_radius_traffic():
     md5_password = hex_md5(D_PASSWORD)
     md5_final = hex_hmac_md5(D_USERNAME, md5_password)
     payload = {"username": D_USERNAME, "md5": md5_final, "Submit": "Submit"}
-    session.post(f"{RADIUS_URL}/radiusmanager/user.php?cont=login", data=payload, timeout=10)
-    session.get(f"{RADIUS_URL}/radiusmanager/user.php?cont=change_lang&lang=English", timeout=10)
-    dash = session.get(f"{RADIUS_URL}/radiusmanager/user.php", timeout=10)
+    session.post(f"{RADIUS_URL}/radiusmanager/user.php?cont=login", data=payload, timeout=30)
+    session.get(f"{RADIUS_URL}/radiusmanager/user.php?cont=change_lang&lang=English", timeout=30)
+    dash = session.get(f"{RADIUS_URL}/radiusmanager/user.php", timeout=30)
     soup = BeautifulSoup(dash.text, "html.parser")
     for td in soup.find_all("td"):
         if "Available total traffic" in td.get_text(strip=True):
@@ -469,10 +467,10 @@ def get_balance():
     
     try:
         login_url = f"{RADIUS_URL}/radiusmanager/user.php?cont=login"
-        response = session.post(login_url, data=payload, timeout=10)
+        response = session.post(login_url, data=payload, timeout=30)
         response.raise_for_status()
-        session.get(f"{RADIUS_URL}/radiusmanager/user.php?cont=change_lang&lang=English", timeout=10)
-        dash = session.get(f"{RADIUS_URL}/radiusmanager/user.php", timeout=10)
+        session.get(f"{RADIUS_URL}/radiusmanager/user.php?cont=change_lang&lang=English", timeout=30)
+        dash = session.get(f"{RADIUS_URL}/radiusmanager/user.php", timeout=30)
         dash.raise_for_status()
         soup = BeautifulSoup(dash.text, "html.parser")
 
@@ -548,7 +546,7 @@ def get_dhcp_mapping():
         "Origin": ROUTER_URL
     }
     try:
-        r = router.post(url, headers=headers, data=data, timeout=7)
+        r = router.post(url, headers=headers, data=data, timeout=15)
         match = re.search(r"dhcpd_lease\s*=\s*(\[.*?\]);", r.text, re.DOTALL)
         if not match:
             logger.warning("dhcpd_lease block not found in router response.")
@@ -589,14 +587,14 @@ def check_bot_services():
 
     # 2. Radius Dashboard
     try:
-        r = requests.get(f"{RADIUS_URL}/radiusmanager/user.php", timeout=3)
+        r = requests.get(f"{RADIUS_URL}/radiusmanager/user.php", timeout=10)
         status['radius'] = "READY" if r.status_code == 200 else "DOWN"
     except:
         status['radius'] = "DOWN"
 
     # 3. Router Connectivity
     try:
-        r = requests.get(ROUTER_URL, auth=ROUTER_AUTH, timeout=3)
+        r = requests.get(ROUTER_URL, auth=ROUTER_AUTH, timeout=10)
         status['link'] = "OK" if r.status_code == 200 else "AUTH_ERR"
     except:
         status['link'] = "UNREACHABLE"
@@ -615,7 +613,7 @@ def _fetch_devlist():
         "Referer": ROUTER_URL + "/",
         "Origin": ROUTER_URL
     }
-    r = router.post(url, headers=headers, data=data, timeout=7)
+    r = router.post(url, headers=headers, data=data, timeout=15)
     dhcp_leases = demjson3.decode(re.search(r"dhcpd_lease\s*=\s*(\[.*?\]);", r.text).group(1))
     wireless_devs = demjson3.decode(re.search(r"wldev\s*=\s*(\[.*?\]);", r.text).group(1))
     return dhcp_leases, wireless_devs
@@ -1397,7 +1395,7 @@ async def before_usage_tracker():
     await bot.wait_until_ready()
     logger.info("Usage tracker started (persists traffic counters across router reboots).")
 
-@tasks.loop(minutes=1.0)
+@tasks.loop(seconds=30.0)
 async def heartbeat_task():
     # Skip if router is already busy — heartbeat is just a keepalive, not critical
     if ROUTER_LOCK.locked():

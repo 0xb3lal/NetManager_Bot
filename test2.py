@@ -1,5 +1,3 @@
-# test for offset + raw iptables
-
 import os
 import re
 import json
@@ -35,7 +33,6 @@ GUILD_ID = discord.Object(id=1475047474832867338)
 CHANNEL_ID = int(os.getenv("CHANNEL_ID")) if os.getenv("CHANNEL_ID") else 0
 CONFIG_FILE = "settings.conf"
 BANNED_MACS_FILE = "bannedDevices.json"
-USAGE_OFFSETS_FILE = "usageOffsets.json"
 ALLOWED_MACS = [
     "4C:20:B8:87:12:E2",
     "F8:34:41:DA:93:EB",
@@ -220,69 +217,6 @@ def _router_heartbeat():
         logger.debug("Router heartbeat timed out (router busy), skipping.")
     except Exception as e:
         logger.debug(f"Router heartbeat failed: {e}")
-
-# ========= USAGE OFFSETS PERSISTENCE (survive router reboots) =========
-def load_usage_state():
-    try:
-        if os.path.exists(USAGE_OFFSETS_FILE):
-            with open(USAGE_OFFSETS_FILE, "r") as f:
-                return json.load(f)
-    except Exception as e:
-        logger.error(f"Error loading usage offsets: {e}")
-    return {}
-
-def save_usage_state(state):
-    try:
-        with open(USAGE_OFFSETS_FILE, "w") as f:
-            json.dump(state, f)
-    except Exception as e:
-        logger.error(f"Error saving usage offsets: {e}")
-
-def update_usage_state():
-    """
-    Runs periodically in the background.
-    Compares the router's live (RAM-based) counters against the last
-    known raw values. If a counter is now LOWER than before, that means
-    the router rebooted and iptables counters reset to 0 -> we add the
-    last known raw value to that device's offset so cumulative totals
-    keep climbing instead of dropping back to zero.
-    """
-    try:
-        speed_history = get_speed_history()
-        state = load_usage_state()
-        changed = False
-
-        for ip, data in speed_history.items():
-            if not ip or ip.startswith("_") or ip.endswith(".0"):
-                continue
-
-            rx = data.get("rx_total", 0) if isinstance(data, dict) else data
-            tx = data.get("tx_total", 0) if isinstance(data, dict) else 0
-            raw_total = rx + tx
-
-            entry = state.get(ip, {"offset": 0, "last_raw": 0})
-
-            if raw_total < entry["last_raw"]:
-                # Router rebooted (or counters reset) -> bank the previous total
-                entry["offset"] += entry["last_raw"]
-                logger.info(f"Detected counter reset for {ip}, banked offset.")
-
-            entry["last_raw"] = raw_total
-            state[ip] = entry
-            changed = True
-
-        if changed:
-            save_usage_state(state)
-
-    except Exception as e:
-        logger.error(f"Error updating usage state: {e}")
-
-def get_cumulative_usage_mb(ip, raw_total):
-    """Read-only lookup: cumulative usage = current raw counter + saved offset."""
-    state = load_usage_state()
-    offset = state.get(ip, {}).get("offset", 0)
-    return bytes_to_mb(raw_total + offset)
-
 
 def get_router_devices_raw():
     router = requests.Session()
@@ -822,9 +756,6 @@ class MyBot(discord.Client):
         if not heartbeat_task.is_running():
             heartbeat_task.start()
 
-        # Track usage offsets to survive router reboots
-        if not usage_tracker_task.is_running():
-            usage_tracker_task.start()
 
         # Keep Discord Gateway alive to prevent idle disconnects (fixes 10062 errors)
         if not discord_keepalive_task.is_running():
@@ -1189,7 +1120,7 @@ async def netstat(interaction: discord.Interaction):
             
             rx = data.get("rx_total", 0) if isinstance(data, dict) else data
             tx = data.get("tx_total", 0) if isinstance(data, dict) else 0
-            usage_mb = get_cumulative_usage_mb(ip, rx + tx)
+            usage_mb = bytes_to_mb(rx + tx)
             total_traffic_mb += usage_mb
 
             target_mac = None
@@ -1387,16 +1318,6 @@ async def botstatus(interaction: discord.Interaction):
     await interaction.followup.send(embed=embed)
 
 # ========= THREADS =========
-@tasks.loop(minutes=10.0)
-async def usage_tracker_task():
-    async with ROUTER_LOCK:
-        await asyncio.to_thread(update_usage_state)
-
-@usage_tracker_task.before_loop
-async def before_usage_tracker():
-    await bot.wait_until_ready()
-    logger.info("Usage tracker started (persists traffic counters across router reboots).")
-
 @tasks.loop(seconds=30.0)
 async def heartbeat_task():
     # Skip if router is already busy — heartbeat is just a keepalive, not critical
