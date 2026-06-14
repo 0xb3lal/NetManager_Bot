@@ -33,7 +33,6 @@ GUILD_ID = discord.Object(id=1475047474832867338)
 CHANNEL_ID = int(os.getenv("CHANNEL_ID")) if os.getenv("CHANNEL_ID") else 0
 CONFIG_FILE = "settings.conf"
 BANNED_MACS_FILE = "bannedDevices.json"
-USAGE_OFFSETS_FILE = "usageOffsets.json"
 ALLOWED_MACS = [
     "4C:20:B8:87:12:E2",
     "F8:34:41:DA:93:EB",
@@ -218,69 +217,6 @@ def _router_heartbeat():
         logger.debug("Router heartbeat timed out (router busy), skipping.")
     except Exception as e:
         logger.debug(f"Router heartbeat failed: {e}")
-
-# ========= USAGE OFFSETS PERSISTENCE (survive router reboots) =========
-def load_usage_state():
-    try:
-        if os.path.exists(USAGE_OFFSETS_FILE):
-            with open(USAGE_OFFSETS_FILE, "r") as f:
-                return json.load(f)
-    except Exception as e:
-        logger.error(f"Error loading usage offsets: {e}")
-    return {}
-
-def save_usage_state(state):
-    try:
-        with open(USAGE_OFFSETS_FILE, "w") as f:
-            json.dump(state, f)
-    except Exception as e:
-        logger.error(f"Error saving usage offsets: {e}")
-
-def update_usage_state():
-    """
-    Runs periodically in the background.
-    Compares the router's live (RAM-based) counters against the last
-    known raw values. If a counter is now LOWER than before, that means
-    the router rebooted and iptables counters reset to 0 -> we add the
-    last known raw value to that device's offset so cumulative totals
-    keep climbing instead of dropping back to zero.
-    """
-    try:
-        speed_history = get_speed_history()
-        state = load_usage_state()
-        changed = False
-
-        for ip, data in speed_history.items():
-            if not ip or ip.startswith("_") or ip.endswith(".0"):
-                continue
-
-            rx = data.get("rx_total", 0) if isinstance(data, dict) else data
-            tx = data.get("tx_total", 0) if isinstance(data, dict) else 0
-            raw_total = rx + tx
-
-            entry = state.get(ip, {"offset": 0, "last_raw": 0})
-
-            if raw_total < entry["last_raw"]:
-                # Router rebooted (or counters reset) -> bank the previous total
-                entry["offset"] += entry["last_raw"]
-                logger.info(f"Detected counter reset for {ip}, banked offset.")
-
-            entry["last_raw"] = raw_total
-            state[ip] = entry
-            changed = True
-
-        if changed:
-            save_usage_state(state)
-
-    except Exception as e:
-        logger.error(f"Error updating usage state: {e}")
-
-def get_cumulative_usage_mb(ip, raw_total):
-    """Read-only lookup: cumulative usage = current raw counter + saved offset."""
-    state = load_usage_state()
-    offset = state.get(ip, {}).get("offset", 0)
-    return bytes_to_mb(raw_total + offset)
-
 
 def get_router_devices_raw():
     router = requests.Session()
@@ -820,10 +756,6 @@ class MyBot(discord.Client):
         if not heartbeat_task.is_running():
             heartbeat_task.start()
 
-        # Track usage offsets to survive router reboots
-        if not usage_tracker_task.is_running():
-            usage_tracker_task.start()
-
         # Keep Discord Gateway alive to prevent idle disconnects (fixes 10062 errors)
         if not discord_keepalive_task.is_running():
             discord_keepalive_task.start()
@@ -1158,13 +1090,81 @@ async def balance(interaction: discord.Interaction):
         )
         await interaction.followup.send(embed=embed)
 
+# --------- /active ---------
+@bot.tree.command(name="active", description="Show currently active devices and their signal strength")
+async def active(interaction: discord.Interaction):
+    if not await safe_defer(interaction, thinking=True):
+        return
+
+    logger.info(f"Active devices status requested by {interaction.user}")
+
+    try:
+        async with ROUTER_LOCK:
+            dhcp_leases, wireless_devs = await asyncio.to_thread(_fetch_devlist)
+
+        active_signals = {dev[1].upper(): dev[2] for dev in wireless_devs}
+        devices_info = {lease[2].upper(): {"name": lease[0], "ip": lease[1]} for lease in dhcp_leases}
+
+        combined_data = []
+
+        for mac, info in devices_info.items():
+            is_online = mac in active_signals
+            rssi = active_signals.get(mac, None)
+
+            is_banned = mac in BANNED_MACS
+
+            if is_banned:
+                status_icon = "⛔"
+                sig_str = "0%"
+            elif is_online and rssi is not None:
+                status_icon = "🟢"
+                quality = min(max(2 * (rssi + 100), 0), 100)
+                sig_str = f"{quality}%"
+            else:
+                status_icon = "🔴"
+                sig_str = "0%"
+
+            combined_data.append({
+                "name": MACS_LIST.get(mac, info['name']),
+                "signal": sig_str,
+                "icon": status_icon,
+                "online_sort": 1 if is_online and not is_banned else 0
+            })
+
+        combined_data.sort(key=lambda x: (x['online_sort'], x['signal']), reverse=True)
+
+        if combined_data:
+            lines = []
+            for dev in combined_data[:15]:
+                name_f = dev['name'][:12].ljust(12)
+                sig_f = dev['signal'].rjust(4)
+
+                lines.append(f"{dev['icon']} `{name_f} | 📶{sig_f}`")
+
+            embed = discord.Embed(
+                title=f"`📡` Active Devices ({len(combined_data)} Devices)",
+                description="\n".join(lines),
+                color=0x2ecc71
+            )
+        else:
+            embed = discord.Embed(description="✨ No devices found.", color=0x95a5a6)
+
+        await interaction.followup.send(embed=embed)
+
+    except Exception as e:
+        logger.error(f"Error in active: {e}")
+        try:
+            await interaction.followup.send("`❌` Error compiling active devices status.")
+        except:
+            pass
+
 # --------- /netstat ---------
 @bot.tree.command(name="netstat", description="Show all recognized devices and their usage")
 async def netstat(interaction: discord.Interaction):
     if not await safe_defer(interaction, thinking=True):
         return
 
-    logger.info(f"Full network status requested by {interaction.user}")
+    logger.info(f"Network usage status requested by {interaction.user}")
     
     try:
         async with ROUTER_LOCK:
@@ -1176,7 +1176,6 @@ async def netstat(interaction: discord.Interaction):
                 speed_future, devlist_future
             )
 
-        active_signals = {dev[1].upper(): dev[2] for dev in wireless_devs}
         devices_info = {lease[2].upper(): {"name": lease[0], "ip": lease[1]} for lease in dhcp_leases}
 
         combined_data = []
@@ -1187,7 +1186,7 @@ async def netstat(interaction: discord.Interaction):
             
             rx = data.get("rx_total", 0) if isinstance(data, dict) else data
             tx = data.get("tx_total", 0) if isinstance(data, dict) else 0
-            usage_mb = get_cumulative_usage_mb(ip, rx + tx)
+            usage_mb = bytes_to_mb(rx + tx)
             total_traffic_mb += usage_mb
 
             target_mac = None
@@ -1201,26 +1200,12 @@ async def netstat(interaction: discord.Interaction):
             
             if not target_mac: continue
 
-            is_online = target_mac in active_signals
-            rssi = active_signals.get(target_mac, None)
-            
-            if is_online and rssi is not None:
-                status_icon = "🟢"
-                quality = min(max(2 * (rssi + 100), 0), 100)
-                sig_str = f"{quality}%"
-            else:
-                status_icon = "🔴"
-                sig_str = "0%"
-
             combined_data.append({
                 "name": MACS_LIST.get(target_mac, raw_name),
                 "usage": usage_mb,
-                "signal": sig_str,
-                "icon": status_icon,
-                "online_sort": 1 if is_online else 0
             })
 
-        combined_data.sort(key=lambda x: (x['online_sort'], x['usage']), reverse=True)
+        combined_data.sort(key=lambda x: x['usage'], reverse=True)
 
         if combined_data:
             lines = []
@@ -1228,13 +1213,12 @@ async def netstat(interaction: discord.Interaction):
                 u_str = f"{dev['usage'] / 1024:.1f}GB" if dev['usage'] >= 1024 else f"{int(dev['usage'])}MB"
                 
                 name_f = dev['name'][:12].ljust(12)
-                sig_f = dev['signal'].rjust(4)
                 usage_f = u_str.rjust(6)
 
-                lines.append(f"{dev['icon']} `{name_f} | 📶{sig_f} | 📊{usage_f}`")
+                lines.append(f"`📊` `{name_f} | 📊{usage_f}`")
 
             embed = discord.Embed(
-                title=f"`📡` Network Status ({len(combined_data)} Devices)",
+                title=f"`📡` Network Usage ({len(combined_data)} Devices)",
                 description="\n".join(lines),
                 color=0x2ecc71
             )
@@ -1293,34 +1277,8 @@ async def set_limit(interaction: discord.Interaction, limit: float):
 
 # ========= Manage commands =========
 
-# --------- /purge user ---------
-purge_group = app_commands.Group(name="purge", description="Commands to delete messages")
-@purge_group.command(name="user", description="Delete messages from a specific user")
-@app_commands.describe(user="The user to delete messages for", amount="Number of messages to check")
-async def purge_user(interaction: discord.Interaction, user: discord.Member, amount: int):
-    try:
-        await interaction.response.defer(ephemeral=True)
-    except Exception as e:
-        logger.warning(f"Failed to defer /purge user (ignoring): {e}")
-
-    try:
-        def is_user(m):
-            return m.author == user
-        
-        deleted = await interaction.channel.purge(limit=amount, check=is_user)
-        
-        try:
-            await interaction.followup.send(f"`✅` Deleted {len(deleted)} messages for {user.display_name}.", ephemeral=True)
-        except:
-            logger.warning("Could not send followup for purge user (interaction expired), but messages were deleted.")
-    except Exception as e:
-        logger.error(f"Error in purge user: {e}")
-        try:
-            await interaction.followup.send("`❌` Failed to purge messages. Check bot permissions.", ephemeral=True)
-        except:
-            pass
-
 # --------- /purge any ---------
+purge_group = app_commands.Group(name="purge", description="Commands to delete messages")
 @purge_group.command(name="any", description="Delete any messages in the channel")
 @app_commands.describe(amount="Number of messages to delete")
 async def purge_any(interaction: discord.Interaction, amount: int):
@@ -1385,17 +1343,7 @@ async def botstatus(interaction: discord.Interaction):
     await interaction.followup.send(embed=embed)
 
 # ========= THREADS =========
-@tasks.loop(minutes=10.0)
-async def usage_tracker_task():
-    async with ROUTER_LOCK:
-        await asyncio.to_thread(update_usage_state)
-
-@usage_tracker_task.before_loop
-async def before_usage_tracker():
-    await bot.wait_until_ready()
-    logger.info("Usage tracker started (persists traffic counters across router reboots).")
-
-@tasks.loop(seconds=30.0)
+@tasks.loop(minutes=1.0)
 async def heartbeat_task():
     # Skip if router is already busy — heartbeat is just a keepalive, not critical
     if ROUTER_LOCK.locked():
