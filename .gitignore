@@ -4,3 +4,4 @@ logs/
 venv/
 .vscode/
 netmanager.db
+__pycache__/
