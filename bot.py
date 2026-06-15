@@ -24,6 +24,7 @@ load_dotenv()
 D_USERNAME = os.getenv("D_USERNAME")         # Dashboard Username (radiusmanager/user.php)
 D_PASSWORD = os.getenv("D_PASSWORD")         # Dashboard Password (radiusmanager/user.php)
 ROUTER_URL = os.getenv("ROUTER_URL")
+RADIUS_URL = os.getenv("RADIUS_URL")
 ROUTER_AUTH = (os.getenv("ROUTER_USER"), os.getenv("ROUTER_PASS"))
 THRESHOLD = 3.0
 BANNED_MACS = set()
@@ -45,7 +46,8 @@ MACS_LIST = {
     "4C:20:B8:87:12:E2": "Iphone",
     "F2:72:C9:B8:4B:C7": "Tablet",
     "32:AC:87:47:17:5D": "Fedora",
-    "D6:62:9E:2B:31:3D": "Yousef"
+    "D6:62:9E:2B:31:3D": "Yousef",
+    "A8:6A:86:FE:B7:80": "Redmi-A3"
 }
 # ========= LOGING SYS =========
 log_dir = "logs"
@@ -102,8 +104,37 @@ def hex_md5(data):
 def hex_hmac_md5(key, data):
     return hmac.new(key.encode(), data.encode(), hashlib.md5).hexdigest()
 
+async def safe_defer(interaction: discord.Interaction, thinking: bool = False) -> bool:
+    """
+    Defers the interaction safely. Returns True if safe to send followup.
+    - thinking=True: shows a loading indicator and extends the followup window to 15 minutes.
+                     Use this for any command that acquires ROUTER_LOCK or does heavy I/O.
+    - thinking=False: silent defer with a 3-second window. Use only for instant memory-only commands.
+    - 40060: already acknowledged (Discord retry) → treat as success.
+    - 10062: unknown/expired interaction → abort (return False).
+    """
+    if interaction.response.is_done():
+        return True
+    try:
+        await interaction.response.defer(thinking=thinking)
+        return True
+    except discord.errors.HTTPException as e:
+        cmd = interaction.command.name if interaction.command else "?"
+        if e.code == 40060:
+            logger.warning(f"Interaction already acknowledged for /{cmd} (40060), continuing.")
+            return True
+        elif e.code == 10062:
+            logger.warning(f"Unknown/expired interaction for /{cmd} (10062), aborting.")
+            return False
+        else:
+            logger.error(f"Failed to defer /{cmd}: {e}")
+            return False
+    except Exception as e:
+        logger.error(f"Failed to defer: {e}")
+        return False
+
 # ========= ROUTER EXEC =========
-def run_cmd(router, headers, cmd):
+def run_cmd(router, headers, cmd, _retry=True):
     data = f"action=execute&command={cmd}\n&_http_id=TIDe5b1505eeac7f67f"
     try:
         logger.debug(f"Sending Command to Router: {cmd}")
@@ -112,7 +143,7 @@ def run_cmd(router, headers, cmd):
             f"{ROUTER_URL}/shell.cgi",
             headers=headers,
             data=data,
-            timeout=10
+            timeout=30
         )
         if response.status_code == 200:
             logger.debug(f"Router executed: {cmd} successfully.")
@@ -120,6 +151,9 @@ def run_cmd(router, headers, cmd):
             logger.error(f"Router returned error code {response.status_code} for command: {cmd}")    
     except (ReadTimeout, ConnectionError) as e:
         logger.error(f"Router Connection Error while executing '{cmd}': {e}")
+        if _retry:
+            logger.warning(f"Retrying command once: {cmd}")
+            run_cmd(router, headers, cmd, _retry=False)
     except Exception as e:
         logger.error(f"Unexpected error in run_cmd: {e}")
 
@@ -162,7 +196,28 @@ def load_banned_macs():
         logger.error(f"Error loading banned MACs: {e}")
     return set()
 
-# ========= ONLINE DEVICES HELPER =========
+def _router_heartbeat():
+    """
+    Keeps the router shell session warm. Uses a short timeout (3s) so it
+    never holds the ROUTER_LOCK long enough to affect real commands.
+    Silently skips on timeout — this is best-effort only.
+    """
+    try:
+        router = requests.Session()
+        router.auth = ROUTER_AUTH
+        router.verify = False
+        headers = {
+            "Referer": f"{ROUTER_URL}/",
+            "User-Agent": "Mozilla/5.0",
+        }
+        data = "action=execute&command=true\n&_http_id=TIDe5b1505eeac7f67f"
+        router.post(f"{ROUTER_URL}/shell.cgi", headers=headers, data=data, timeout=10)
+        logger.debug("Router heartbeat sent successfully.")
+    except (ReadTimeout, ConnectionError):
+        logger.debug("Router heartbeat timed out (router busy), skipping.")
+    except Exception as e:
+        logger.debug(f"Router heartbeat failed: {e}")
+
 def get_router_devices_raw():
     router = requests.Session()
     router.auth = ROUTER_AUTH
@@ -174,7 +229,7 @@ def get_router_devices_raw():
             "Accept": "text/html,application/xhtml+xml,xml;q=0.9,*/*;q=0.8"
         }
         
-        response = router.get(url, headers=headers, timeout=10)
+        response = router.get(url, headers=headers, timeout=15)
         if response.status_code == 200:
             return response.text
         return ""
@@ -234,37 +289,44 @@ def unban_mac(router, headers, mac):
     else:
         logger.warning(f"Internal: Attempted to unban {mac} but it wasn't in the list.")
 
-def check_and_lock(bot_instance):
+def _fetch_radius_traffic():
+    """Fetch available traffic from Radius dashboard. No router involved — no lock needed."""
     session = requests.Session()
     md5_password = hex_md5(D_PASSWORD)
     md5_final = hex_hmac_md5(D_USERNAME, md5_password)
     payload = {"username": D_USERNAME, "md5": md5_final, "Submit": "Submit"}
+    session.post(f"{RADIUS_URL}/radiusmanager/user.php?cont=login", data=payload, timeout=30)
+    session.get(f"{RADIUS_URL}/radiusmanager/user.php?cont=change_lang&lang=English", timeout=30)
+    dash = session.get(f"{RADIUS_URL}/radiusmanager/user.php", timeout=30)
+    soup = BeautifulSoup(dash.text, "html.parser")
+    for td in soup.find_all("td"):
+        if "Available total traffic" in td.get_text(strip=True):
+            return td.find_next_sibling("td").get_text(strip=True)
+    return None
 
+def _apply_lockdown_for_traffic(traffic_value):
+    """Apply router firewall rules based on traffic value. Caller must hold ROUTER_LOCK."""
+    router = requests.Session()
+    router.auth = ROUTER_AUTH
+    headers = {"Content-Type": "text/plain;charset=UTF-8", "Referer": ROUTER_URL + "/", "Origin": ROUTER_URL}
+    if traffic_value < THRESHOLD:
+        enable_lockdown(router, headers, force_lock=True)
+        return "`❌` System Lockdown", 0xff4747
+    else:
+        enable_lockdown(router, headers, force_lock=False)
+        return "`✅` System Normal", 0x47ff7e
+
+def check_and_lock(bot_instance):
     try:
-        session.post("http://10.0.0.254/radiusmanager/user.php?cont=login", data=payload, timeout=10)
-        session.get("http://10.0.0.254/radiusmanager/user.php?cont=change_lang&lang=English", timeout=10)
-        dash = session.get("http://10.0.0.254/radiusmanager/user.php", timeout=10)
-        soup = BeautifulSoup(dash.text, "html.parser")
+        # Step 1: Fetch from Radius — no ROUTER_LOCK needed (different host)
+        available_traffic = _fetch_radius_traffic()
+        if not available_traffic:
+            return
 
-        available_traffic = None
-        for td in soup.find_all("td"):
-            if "Available total traffic" in td.get_text(strip=True):
-                available_traffic = td.find_next_sibling("td").get_text(strip=True)
-                break
-
-        if not available_traffic: return
-        
         traffic_value = float(available_traffic.split()[0])
-        router = requests.Session()
-        router.auth = ROUTER_AUTH
-        headers = {"Content-Type": "text/plain;charset=UTF-8", "Referer": ROUTER_URL + "/", "Origin": ROUTER_URL}
 
-        if traffic_value < THRESHOLD:
-            enable_lockdown(router, headers, force_lock=True)
-            e_title, e_color = "`❌` System Lockdown", 0xff4747
-        else:
-            enable_lockdown(router, headers, force_lock=False)
-            e_title, e_color = "`✅` System Normal", 0x47ff7e
+        # Step 2: Apply router rules — caller already holds ROUTER_LOCK
+        e_title, e_color = _apply_lockdown_for_traffic(traffic_value)
 
         balance_label = "Balance:".ljust(9)
         limit_label   = "Limit:".ljust(9)
@@ -294,6 +356,44 @@ def check_and_lock(bot_instance):
     except Exception as e:
         logger.error(f"Main Check Error: {e}")
 
+async def async_check_and_lock(bot_instance):
+    """
+    Two-phase traffic check:
+    Phase 1 — Radius fetch (no lock, different host, up to 30s OK)
+    Phase 2 — Router lockdown (holds ROUTER_LOCK, fast iptables only)
+    """
+    try:
+        available_traffic = await asyncio.to_thread(_fetch_radius_traffic)
+        if not available_traffic:
+            return
+        traffic_value = float(available_traffic.split()[0])
+
+        async with ROUTER_LOCK:
+            e_title, e_color = await asyncio.to_thread(
+                _apply_lockdown_for_traffic, traffic_value
+            )
+
+        balance_label = "Balance:".ljust(9)
+        limit_label   = "Limit:".ljust(9)
+        status_box = (
+            f"```\n"
+            f"{balance_label} {available_traffic}\n"
+            f"{limit_label} {THRESHOLD} GB\n"
+            f"```"
+        )
+        embed = discord.Embed(title=e_title, description=status_box, color=e_color)
+
+        try:
+            channel = bot_instance.get_channel(CHANNEL_ID)
+            if channel:
+                await channel.send(embed=embed)
+        except Exception:
+            logger.error("Failed to push status update to Discord")
+
+    except Exception as e:
+        logger.error(f"Main Check Error: {e}")
+
+
 # ========= Get Balance Only =========
 def get_balance():
     session = requests.Session()
@@ -302,11 +402,11 @@ def get_balance():
     payload = {"username": D_USERNAME, "md5": md5_final, "Submit": "Submit"}
     
     try:
-        login_url = "http://10.0.0.254/radiusmanager/user.php?cont=login"
-        response = session.post(login_url, data=payload, timeout=10)
+        login_url = f"{RADIUS_URL}/radiusmanager/user.php?cont=login"
+        response = session.post(login_url, data=payload, timeout=30)
         response.raise_for_status()
-        session.get("http://10.0.0.254/radiusmanager/user.php?cont=change_lang&lang=English", timeout=10)
-        dash = session.get("http://10.0.0.254/radiusmanager/user.php", timeout=10)
+        session.get(f"{RADIUS_URL}/radiusmanager/user.php?cont=change_lang&lang=English", timeout=30)
+        dash = session.get(f"{RADIUS_URL}/radiusmanager/user.php", timeout=30)
         dash.raise_for_status()
         soup = BeautifulSoup(dash.text, "html.parser")
 
@@ -347,15 +447,15 @@ def get_speed_history():
     }
 
     try:
-        router.get(f"{ROUTER_URL}/", timeout=15)
-        
+        # Skip warm-up entirely — heartbeat_task keeps the session warm.
+        # Total budget: 3s (init) + 7s (data) = 10s max inside the lock.
         url = f"{ROUTER_URL}/update.cgi"
-        
+
         init_data = "exec=ipt_bandwidth&arg0=start&_http_id=TIDe5b1505eeac7f67f"
-        router.post(url, headers=headers, data=init_data, timeout=5)
+        router.post(url, headers=headers, data=init_data, timeout=10)
 
         data_payload = "exec=ipt_bandwidth&arg0=speed&_http_id=TIDe5b1505eeac7f67f"
-        r = router.post(url, headers=headers, data=data_payload, timeout=10)
+        r = router.post(url, headers=headers, data=data_payload, timeout=30)
         
         match = re.search(r"speed_history\s*=\s*(\{.*?\});", r.text, re.DOTALL)
         if not match:
@@ -382,7 +482,7 @@ def get_dhcp_mapping():
         "Origin": ROUTER_URL
     }
     try:
-        r = router.post(url, headers=headers, data=data, timeout=10)
+        r = router.post(url, headers=headers, data=data, timeout=15)
         match = re.search(r"dhcpd_lease\s*=\s*(\[.*?\]);", r.text, re.DOTALL)
         if not match:
             logger.warning("dhcpd_lease block not found in router response.")
@@ -403,7 +503,7 @@ def check_bot_services():
     status = {}
 
     try:
-    # 1. CIFS2 Check
+    # 1. JFFS2 Check
         router = requests.Session()
         router.auth = ROUTER_AUTH
         headers = {
@@ -415,22 +515,22 @@ def check_bot_services():
             f"{ROUTER_URL}/shell.cgi",
             headers=headers,
             data=data,
-            timeout=5
+            timeout=10
         )
-        status['cifs'] = "ONLINE" if "/cifs2" in r.text else "OFFLINE"
+        status['jffs2'] = "ONLINE" if "/jffs" in r.text else "OFFLINE"
     except:
-        status['cifs'] = "TIMEOUT"
+        status['jffs2'] = "TIMEOUT"
 
     # 2. Radius Dashboard
     try:
-        r = requests.get("http://10.0.0.254/radiusmanager/user.php", timeout=3)
+        r = requests.get(f"{RADIUS_URL}/radiusmanager/user.php", timeout=10)
         status['radius'] = "READY" if r.status_code == 200 else "DOWN"
     except:
         status['radius'] = "DOWN"
 
     # 3. Router Connectivity
     try:
-        r = requests.get(ROUTER_URL, auth=ROUTER_AUTH, timeout=3)
+        r = requests.get(ROUTER_URL, auth=ROUTER_AUTH, timeout=10)
         status['link'] = "OK" if r.status_code == 200 else "AUTH_ERR"
     except:
         status['link'] = "UNREACHABLE"
@@ -449,7 +549,7 @@ def _fetch_devlist():
         "Referer": ROUTER_URL + "/",
         "Origin": ROUTER_URL
     }
-    r = router.post(url, headers=headers, data=data, timeout=10)
+    r = router.post(url, headers=headers, data=data, timeout=30)
     dhcp_leases = demjson3.decode(re.search(r"dhcpd_lease\s*=\s*(\[.*?\]);", r.text).group(1))
     wireless_devs = demjson3.decode(re.search(r"wldev\s*=\s*(\[.*?\]);", r.text).group(1))
     return dhcp_leases, wireless_devs
@@ -460,14 +560,11 @@ REPORT_TIME = time(hour=23, minute=59, tzinfo=ZoneInfo("Africa/Cairo"))
 @tasks.loop(time=REPORT_TIME)
 async def daily_network_report():
     try:
-        speed_history = await asyncio.to_thread(get_speed_history)
-        router = requests.Session()
-        router.auth = ROUTER_AUTH
-        router.verify = False
-        url = f"{ROUTER_URL}/update.cgi"
-        data = "exec=devlist&_http_id=TIDe5b1505eeac7f67f"
-        r = await asyncio.to_thread(router.post, url, data=data, timeout=10)
-        dhcp_leases = demjson3.decode(re.search(r"dhcpd_lease\s*=\s*(\[.*?\]);", r.text).group(1))
+        async with ROUTER_LOCK:
+            speed_history = await asyncio.to_thread(get_speed_history)
+
+        async with ROUTER_LOCK:
+            dhcp_leases, _ = await asyncio.to_thread(_fetch_devlist)
         devices_info = {lease[2].upper(): {"name": lease[0], "ip": lease[1]} for lease in dhcp_leases}
         
         combined_data = []
@@ -491,7 +588,10 @@ async def daily_network_report():
             channel = bot.get_channel(CHANNEL_ID)
             if not channel: return
             now = datetime.now(ZoneInfo("Africa/Cairo"))
-            lines = [f"`{dev['name'][:15].ljust(15)} | 📊{(f'{dev['usage']/1024:.1f}GB' if dev['usage']>=1024 else f'{int(dev['usage'])}MB').rjust(8)}`" for dev in combined_data[:15]]
+            lines = []
+            for dev in combined_data[:15]:
+                u_str = f"{dev['usage']/1024:.1f}GB" if dev['usage'] >= 1024 else f"{int(dev['usage'])}MB"
+                lines.append(f"`{dev['name'][:15].ljust(15)} | 📊{u_str.rjust(8)}`")
             embed = discord.Embed(title=f"📅 Daily Usage Report ({now.strftime('%Y-%m-%d')})", description="\n".join(lines), color=0x3498db, timestamp=now)
             embed.set_footer(text=f"Total Network Load: {total_day_usage_mb/1024:.2f} GB")
             await channel.send(embed=embed)
@@ -522,24 +622,29 @@ class BulkBlockSelect(discord.ui.Select):
         router = requests.Session()
         router.auth = ROUTER_AUTH
         headers = {
-            "Content-Type": "text/plain;charset=UTF-8", 
-            "Referer": f"{ROUTER_URL}/", 
+            "Content-Type": "text/plain;charset=UTF-8",
+            "Referer": f"{ROUTER_URL}/",
             "Origin": ROUTER_URL
         }
-        
-        selected_macs = self.values
-        success_list = await asyncio.to_thread(
-            lambda: [
-                (ban_mac(router, headers, mac.upper()), MACS_LIST.get(mac.upper(), "Unknown"))[1]
-                for mac in selected_macs
-            ]
-        )
 
-        lines = []
-        for i, m in enumerate(BANNED_MACS, 1):
-            name = MACS_LIST.get(m, 'Unknown Device')
-            lines.append(f"{i:02d}. {name}")
-        
+        selected_macs = [m.upper() for m in self.values]
+
+        def _bulk_ban():
+            added = []
+            for mac in selected_macs:
+                if mac not in BANNED_MACS:
+                    BANNED_MACS.add(mac)
+                    added.append(mac)
+                    logger.info(f"Internal: Added {mac} to memory banned set.")
+            if added:
+                save_banned_macs()
+                enable_lockdown(router, headers, force_lock=False)
+            return [MACS_LIST.get(m, "Unknown") for m in selected_macs]
+
+        async with ROUTER_LOCK:
+            success_list = await asyncio.to_thread(_bulk_ban)
+
+        lines = [f"{i:02d}. {MACS_LIST.get(m, 'Unknown Device')}" for i, m in enumerate(BANNED_MACS, 1)]
         current_list = "```\n" + "\n".join(lines) + "```" if lines else "No devices currently banned"
 
         embed = discord.Embed(
@@ -548,7 +653,7 @@ class BulkBlockSelect(discord.ui.Select):
             color=0xff4747
         )
         embed.add_field(name="`📝` Updated Banned List", value=current_list, inline=False)
-        
+
         await interaction.followup.send(embed=embed)
 
 class BulkBlockView(discord.ui.View):
@@ -582,12 +687,13 @@ class BulkUnblockSelect(discord.ui.Select):
         }
         
         selected_macs = self.values
-        success_list = await asyncio.to_thread(
-            lambda: [
-                (unban_mac(router, headers, mac.upper()), MACS_LIST.get(mac.upper(), "Unknown"))[1]
-                for mac in selected_macs
-            ]
-        )
+        async with ROUTER_LOCK:
+            success_list = await asyncio.to_thread(
+                lambda: [
+                    (unban_mac(router, headers, mac.upper()), MACS_LIST.get(mac.upper(), "Unknown"))[1]
+                    for mac in selected_macs
+                ]
+            )
 
         lines = []
         for i, m in enumerate(BANNED_MACS, 1):
@@ -613,8 +719,22 @@ class BulkUnblockView(discord.ui.View):
 # ========= DISCORD BOT SETUP =========
 class MyBot(discord.Client):
     def __init__(self):
-        super().__init__(intents=discord.Intents.default())
+        super().__init__(
+            intents=discord.Intents.default(),
+            heartbeat_timeout=60.0,
+        )
         self.tree = app_commands.CommandTree(self)
+
+    async def on_tree_error(self, interaction: discord.Interaction, error: app_commands.AppCommandError):
+        # Silently ignore 10062 on autocomplete — Discord cancels old autocomplete
+        # interactions as the user keeps typing, so this is expected and harmless.
+        if isinstance(error, app_commands.errors.CommandInvokeError):
+            cause = error.original
+        else:
+            cause = error
+        if isinstance(cause, discord.errors.NotFound) and cause.code == 10062:
+            return
+        logger.error(f"Tree error in /{interaction.command.name if interaction.command else '?'}: {error}")
 
     async def setup_hook(self):
         self.tree.copy_global_to(guild=GUILD_ID)
@@ -628,13 +748,34 @@ class MyBot(discord.Client):
         if not daily_network_report.is_running():
             daily_network_report.start()
 
+        # Keep router shell session warm to avoid first-command failures
+        if not heartbeat_task.is_running():
+            heartbeat_task.start()
+
+        # Keep Discord Gateway alive to prevent idle disconnects (fixes 10062 errors)
+        if not discord_keepalive_task.is_running():
+            discord_keepalive_task.start()
+
+    async def on_disconnect(self):
+        logger.warning("Bot disconnected from Discord Gateway. Waiting for automatic reconnect...")
+
+    async def on_resumed(self):
+        logger.info("Discord Gateway session resumed successfully. Bot is fully operational.")
+
     async def on_ready(self):
         logger.info(f"Bot ready: {self.user}")
         global BANNED_MACS
         BANNED_MACS = load_banned_macs()
         if BANNED_MACS:
             logger.info(f"Loaded {len(BANNED_MACS)} banned MACs from file, reapplying firewall rules...")
-            await asyncio.to_thread(_reapply_banned_macs)
+            async with ROUTER_LOCK:
+                await asyncio.to_thread(_reapply_banned_macs)
+
+# ========= ROUTER LOCK =========
+# Single asyncio.Lock that serializes ALL router HTTP traffic.
+# The router (weak CPU/RAM) can't handle concurrent requests without timing out.
+# Every task or command that touches the router must acquire this lock first.
+ROUTER_LOCK = asyncio.Lock()
 
 bot = MyBot()
 
@@ -673,10 +814,7 @@ def get_banned_list_text():
 @bot.tree.command(name="blk", description="Ban a MAC address from the list")
 @app_commands.autocomplete(mac=mac_autocomplete)
 async def ban(interaction: discord.Interaction, mac: str):
-    try:
-        await interaction.response.defer()
-    except Exception as e:
-        logger.error(f"Failed to defer /blk: {e}")
+    if not await safe_defer(interaction, thinking=True):
         return
 
     logger.info(f"ACTION: /blk | User: {interaction.user} | Target: {mac}")
@@ -687,10 +825,10 @@ async def ban(interaction: discord.Interaction, mac: str):
         router.auth = ROUTER_AUTH
         headers = {"Content-Type": "text/plain;charset=UTF-8", "Referer": ROUTER_URL + "/", "Origin": ROUTER_URL}
         
-        await asyncio.to_thread(ban_mac, router, headers, mac_upper)
+        async with ROUTER_LOCK:
+            await asyncio.to_thread(ban_mac, router, headers, mac_upper)
         
         device_name = MACS_LIST.get(mac_upper, "Unknown Device")
-        
         lines = []
         for i, m in enumerate(BANNED_MACS, 1):
             name = MACS_LIST.get(m, 'Unknown Device')
@@ -724,10 +862,7 @@ async def ban(interaction: discord.Interaction, mac: str):
 @bot.tree.command(name="rm", description="Unban a device from the current banned list")
 @app_commands.autocomplete(mac=banned_macs_autocomplete)
 async def rm(interaction: discord.Interaction, mac: str):
-    try:
-        await interaction.response.defer()
-    except Exception as e:
-        logger.error(f"Failed to defer /rm: {e}")
+    if not await safe_defer(interaction, thinking=True):
         return
 
     logger.info(f"ACTION: /rm | User: {interaction.user} | Target MAC: {mac}")
@@ -738,10 +873,10 @@ async def rm(interaction: discord.Interaction, mac: str):
         router.auth = ROUTER_AUTH
         headers = {"Content-Type": "text/plain;charset=UTF-8", "Referer": ROUTER_URL + "/", "Origin": ROUTER_URL} 
         
-        await asyncio.to_thread(unban_mac, router, headers, mac_upper)
+        async with ROUTER_LOCK:
+            await asyncio.to_thread(unban_mac, router, headers, mac_upper)
         
         device_name = MACS_LIST.get(mac_upper, "Unknown Device")
-        
         lines = []
         for i, m in enumerate(BANNED_MACS, 1):
             name = MACS_LIST.get(m, 'Unknown')
@@ -773,10 +908,7 @@ async def rm(interaction: discord.Interaction, mac: str):
 # --------- /blkall ---------
 @bot.tree.command(name="blkall", description="Select multiple saved devices to block")
 async def blkall(interaction: discord.Interaction):
-    try:
-        await interaction.response.defer(ephemeral=True)
-    except Exception as e:
-        logger.error(f"Failed to defer /blkall: {e}")
+    if not await safe_defer(interaction, thinking=True):
         return
 
     logger.info(f"ACTION: /blkall | User: {interaction.user}")
@@ -809,10 +941,7 @@ async def blkall(interaction: discord.Interaction):
 # --------- /rmall ---------
 @bot.tree.command(name="rmall", description="Select multiple devices to unblock from the banned list")
 async def rmall(interaction: discord.Interaction):
-    try:
-        await interaction.response.defer(ephemeral=True)
-    except Exception as e:
-        logger.error(f"Failed to defer /rmall: {e}")
+    if not await safe_defer(interaction, thinking=True):
         return
 
     logger.info(f"ACTION: /rmall | User: {interaction.user}")
@@ -957,22 +1086,89 @@ async def balance(interaction: discord.Interaction):
         )
         await interaction.followup.send(embed=embed)
 
+# --------- /active ---------
+@bot.tree.command(name="active", description="Show currently active devices and their signal strength")
+async def active(interaction: discord.Interaction):
+    if not await safe_defer(interaction, thinking=True):
+        return
+
+    logger.info(f"Active devices status requested by {interaction.user}")
+
+    try:
+        async with ROUTER_LOCK:
+            dhcp_leases, wireless_devs = await asyncio.to_thread(_fetch_devlist)
+
+        active_signals = {dev[1].upper(): dev[2] for dev in wireless_devs}
+        devices_info = {lease[2].upper(): {"name": lease[0], "ip": lease[1]} for lease in dhcp_leases}
+
+        combined_data = []
+
+        for mac, info in devices_info.items():
+            is_online = mac in active_signals
+            rssi = active_signals.get(mac, None)
+
+            is_banned = mac in BANNED_MACS
+
+            if is_banned:
+                status_icon = "⛔"
+                sig_str = "0%"
+            elif is_online and rssi is not None:
+                status_icon = "🟢"
+                quality = min(max(2 * (rssi + 100), 0), 100)
+                sig_str = f"{quality}%"
+            else:
+                status_icon = "🔴"
+                sig_str = "0%"
+
+            combined_data.append({
+                "name": MACS_LIST.get(mac, info['name']),
+                "signal": sig_str,
+                "icon": status_icon,
+                "online_sort": 1 if is_online and not is_banned else 0
+            })
+
+        combined_data.sort(key=lambda x: (x['online_sort'], x['signal']), reverse=True)
+
+        if combined_data:
+            lines = []
+            for dev in combined_data[:15]:
+                name_f = dev['name'][:12].ljust(12)
+                sig_f = dev['signal'].rjust(4)
+
+                lines.append(f"{dev['icon']} `{name_f} | 📶{sig_f}`")
+
+            embed = discord.Embed(
+                title=f"`📡` Active Devices ({len(combined_data)} Devices)",
+                description="\n".join(lines),
+                color=0x2ecc71
+            )
+        else:
+            embed = discord.Embed(description="✨ No devices found.", color=0x95a5a6)
+
+        await interaction.followup.send(embed=embed)
+
+    except Exception as e:
+        logger.error(f"Error in active: {e}")
+        try:
+            await interaction.followup.send("`❌` Error compiling active devices status.")
+        except:
+            pass
+
 # --------- /netstat ---------
 @bot.tree.command(name="netstat", description="Show all recognized devices and their usage")
 async def netstat(interaction: discord.Interaction):
-    try:
-        await interaction.response.defer()
-    except Exception as e:
-        logger.error(f"Failed to defer /netstat: {e}")
+    if not await safe_defer(interaction, thinking=True):
         return
 
-    logger.info(f"Full network status requested by {interaction.user}")
+    logger.info(f"Network usage status requested by {interaction.user}")
     
     try:
-        speed_history = await asyncio.to_thread(get_speed_history)
-        dhcp_leases, wireless_devs = await asyncio.to_thread(_fetch_devlist)
+        async with ROUTER_LOCK:
+            speed_history = await asyncio.to_thread(get_speed_history)
 
-        active_signals = {dev[1].upper(): dev[2] for dev in wireless_devs}
+        async with ROUTER_LOCK:
+            dhcp_leases, wireless_devs = await asyncio.to_thread(_fetch_devlist)
+
         devices_info = {lease[2].upper(): {"name": lease[0], "ip": lease[1]} for lease in dhcp_leases}
 
         combined_data = []
@@ -997,26 +1193,12 @@ async def netstat(interaction: discord.Interaction):
             
             if not target_mac: continue
 
-            is_online = target_mac in active_signals
-            rssi = active_signals.get(target_mac, None)
-            
-            if is_online and rssi is not None:
-                status_icon = "🟢"
-                quality = min(max(2 * (rssi + 100), 0), 100)
-                sig_str = f"{quality}%"
-            else:
-                status_icon = "🔴"
-                sig_str = "0%"
-
             combined_data.append({
                 "name": MACS_LIST.get(target_mac, raw_name),
                 "usage": usage_mb,
-                "signal": sig_str,
-                "icon": status_icon,
-                "online_sort": 1 if is_online else 0
             })
 
-        combined_data.sort(key=lambda x: (x['online_sort'], x['usage']), reverse=True)
+        combined_data.sort(key=lambda x: x['usage'], reverse=True)
 
         if combined_data:
             lines = []
@@ -1024,13 +1206,12 @@ async def netstat(interaction: discord.Interaction):
                 u_str = f"{dev['usage'] / 1024:.1f}GB" if dev['usage'] >= 1024 else f"{int(dev['usage'])}MB"
                 
                 name_f = dev['name'][:12].ljust(12)
-                sig_f = dev['signal'].rjust(4)
                 usage_f = u_str.rjust(6)
 
-                lines.append(f"{dev['icon']} `{name_f} | 📶{sig_f} | 📊{usage_f}`")
+                lines.append(f"`📱` `{name_f} | 📊{usage_f}`")
 
             embed = discord.Embed(
-                title=f"`📡` Network Status ({len(combined_data)} Devices)",
+                title=f"`📡` Network Usage ({len(combined_data)} Devices)",
                 description="\n".join(lines),
                 color=0x2ecc71
             )
@@ -1053,10 +1234,7 @@ async def netstat(interaction: discord.Interaction):
 async def set_limit(interaction: discord.Interaction, limit: float):
     global THRESHOLD
     
-    try:
-        await interaction.response.defer()
-    except Exception as e:
-        logger.error(f"Failed to defer /limit: {e}")
+    if not await safe_defer(interaction, thinking=True):
         return
 
     try:
@@ -1084,7 +1262,7 @@ async def set_limit(interaction: discord.Interaction, limit: float):
         
         await interaction.followup.send(embed=embed)
         
-        await asyncio.to_thread(check_and_lock, bot)
+        await async_check_and_lock(bot)
 
     except Exception as e:
         logger.error(f"Error in limit command: {e}")
@@ -1092,34 +1270,8 @@ async def set_limit(interaction: discord.Interaction, limit: float):
 
 # ========= Manage commands =========
 
-# --------- /purge user ---------
-purge_group = app_commands.Group(name="purge", description="Commands to delete messages")
-@purge_group.command(name="user", description="Delete messages from a specific user")
-@app_commands.describe(user="The user to delete messages for", amount="Number of messages to check")
-async def purge_user(interaction: discord.Interaction, user: discord.Member, amount: int):
-    try:
-        await interaction.response.defer(ephemeral=True)
-    except Exception as e:
-        logger.warning(f"Failed to defer /purge user (ignoring): {e}")
-
-    try:
-        def is_user(m):
-            return m.author == user
-        
-        deleted = await interaction.channel.purge(limit=amount, check=is_user)
-        
-        try:
-            await interaction.followup.send(f"`✅` Deleted {len(deleted)} messages for {user.display_name}.", ephemeral=True)
-        except:
-            logger.warning("Could not send followup for purge user (interaction expired), but messages were deleted.")
-    except Exception as e:
-        logger.error(f"Error in purge user: {e}")
-        try:
-            await interaction.followup.send("`❌` Failed to purge messages. Check bot permissions.", ephemeral=True)
-        except:
-            pass
-
 # --------- /purge any ---------
+purge_group = app_commands.Group(name="purge", description="Commands to delete messages")
 @purge_group.command(name="any", description="Delete any messages in the channel")
 @app_commands.describe(amount="Number of messages to delete")
 async def purge_any(interaction: discord.Interaction, amount: int):
@@ -1146,13 +1298,11 @@ bot.tree.add_command(purge_group)
 # --------- /botstatus ---------
 @bot.tree.command(name="botstatus", description="Check core system services status")
 async def botstatus(interaction: discord.Interaction):
-    try:
-        await interaction.response.defer()
-    except Exception as e:
-        logger.error(f"Failed to defer /botstatus: {e}")
+    if not await safe_defer(interaction, thinking=True):
         return
 
-    health = await asyncio.to_thread(check_bot_services)
+    async with ROUTER_LOCK:
+        health = await asyncio.to_thread(check_bot_services)
     def get_status_emoji(status_val):
         status_val = status_val.upper()
         if status_val in ["ONLINE", "READY", "OK"]:
@@ -1165,7 +1315,7 @@ async def botstatus(interaction: discord.Interaction):
     embed_color = 0x2ecc71 if all_ok else 0xe74c3c
     title_icon = "✅" if all_ok else "⚠️"
 
-    cifs_line   = f"{'CIFS Storage':<14} | {health['cifs']:<8} {get_status_emoji(health['cifs'])}"
+    cifs_line   = f"{'JFFS2 Storage':<14} | {health['jffs2']:<8} {get_status_emoji(health['jffs2'])}"
     radius_line = f"{'Radius Dash':<14} | {health['radius']:<8} {get_status_emoji(health['radius'])}"
     link_line   = f"{'Router Link':<14} | {health['link']:<8} {get_status_emoji(health['link'])}"
 
@@ -1186,11 +1336,25 @@ async def botstatus(interaction: discord.Interaction):
     await interaction.followup.send(embed=embed)
 
 # ========= THREADS =========
+@tasks.loop(minutes=1.0)
+async def heartbeat_task():
+    # Skip if router is already busy — heartbeat is just a keepalive, not critical
+    if ROUTER_LOCK.locked():
+        logger.debug("Router heartbeat skipped (router busy with another task).")
+        return
+    async with ROUTER_LOCK:
+        await asyncio.to_thread(_router_heartbeat)
+
+@heartbeat_task.before_loop
+async def before_heartbeat():
+    await bot.wait_until_ready()
+    logger.info("Router heartbeat started (keeps router shell session warm).")
+
 @tasks.loop(hours=1.0)
 async def traffic_check_task():
     logger.info("Starting scheduled traffic check...")
     try:
-        await asyncio.to_thread(check_and_lock, bot)
+        await async_check_and_lock(bot)
         logger.info("Scheduled traffic check completed successfully.")
     except Exception as e:
         logger.exception(f"Unexpected error during traffic check task: {e}")
@@ -1200,6 +1364,25 @@ async def before_traffic_check():
     logger.info("Waiting for bot to be ready before starting traffic task...")
     await bot.wait_until_ready()
     logger.info("Bot is ready. Traffic task started.")
+
+@tasks.loop(minutes=2.0)
+async def discord_keepalive_task():
+    """
+    Fetches the bot's own user from Discord's REST API every 2 minutes.
+    This is a real HTTP round-trip (not a local cache read) which keeps
+    the underlying connection pool warm and prevents the Gateway WebSocket
+    from going stale — the root cause of 10062 errors after idle periods.
+    """
+    try:
+        await bot.fetch_user(bot.user.id)
+        logger.debug("Discord keepalive ping sent successfully.")
+    except Exception as e:
+        logger.debug(f"Discord keepalive failed (non-critical): {e}")
+
+@discord_keepalive_task.before_loop
+async def before_discord_keepalive():
+    await bot.wait_until_ready()
+    logger.info("Discord keepalive task started (prevents idle Gateway disconnects).")
 
 async def main():
     try:
