@@ -549,7 +549,7 @@ def _fetch_devlist():
         "Referer": ROUTER_URL + "/",
         "Origin": ROUTER_URL
     }
-    r = router.post(url, headers=headers, data=data, timeout=30)
+    r = router.post(url, headers=headers, data=data, timeout=60)
     dhcp_leases = demjson3.decode(re.search(r"dhcpd_lease\s*=\s*(\[.*?\]);", r.text).group(1))
     wireless_devs = demjson3.decode(re.search(r"wldev\s*=\s*(\[.*?\]);", r.text).group(1))
     return dhcp_leases, wireless_devs
@@ -1336,7 +1336,7 @@ async def botstatus(interaction: discord.Interaction):
     await interaction.followup.send(embed=embed)
 
 # ========= THREADS =========
-@tasks.loop(minutes=1.0)
+@tasks.loop(minutes=3.0)
 async def heartbeat_task():
     # Skip if router is already busy — heartbeat is just a keepalive, not critical
     if ROUTER_LOCK.locked():
