@@ -1,22 +1,20 @@
 import os
 import db
 import re
-import copy
 import urllib3
-import logging
 import asyncio
 import discord
 import requests
 import demjson3
 import hashlib
 import hmac as _hmac
+from logger import logger
 from zoneinfo import ZoneInfo
 from discord.ext import tasks
 from bs4 import BeautifulSoup
 from dotenv import load_dotenv
 from discord import app_commands
 from datetime import datetime, time
-from logging.handlers import RotatingFileHandler
 from requests.exceptions import ReadTimeout, ConnectionError
 
 # ========= CONFIG =========
@@ -30,53 +28,12 @@ DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
 GUILD_ID     = discord.Object(id=1475047474832867338)
 CHANNEL_ID   = int(os.getenv("CHANNEL_ID")) if os.getenv("CHANNEL_ID") else 0
 
+# ========= DB CONFIG =========
 db.init_db()
-
 THRESHOLD   = db.get_threshold()
 BANNED_MACS = db.get_banned()
 MACS_LIST   = db.get_devices()
 ALLOWED_MACS = db.get_allowed()
-
-# ========= LOGGING SYS =========
-log_dir = "logs"
-if not os.path.exists(log_dir):
-    os.makedirs(log_dir)
-
-log_path = os.path.join(log_dir, "bot.log")
-
-class ColorFormatter(logging.Formatter):
-    COLORS = {
-        "DEBUG":    "\033[36m",
-        "INFO":     "\033[34m",
-        "WARNING":  "\033[33m",
-        "ERROR":    "\033[31m",
-        "CRITICAL": "\033[41m",
-    }
-    RESET = "\033[0m"
-
-    def format(self, record):
-        record_copy = copy.copy(record)
-        levelname = record_copy.levelname
-        if levelname in self.COLORS:
-            record_copy.levelname = f"{self.COLORS[levelname]}{levelname}{self.RESET}"
-        return super().format(record_copy)
-
-handler = RotatingFileHandler(
-    log_path, maxBytes=5*1024*1024, backupCount=1, encoding="utf-8", mode="w"
-)
-console_handler = logging.StreamHandler()
-formatter = logging.Formatter(
-    fmt="%(asctime)s | %(levelname)-8s | %(message)s",
-    datefmt="%Y-%m-%d %I:%M:%S %p"
-)
-color_formatter = ColorFormatter(
-    fmt="%(asctime)s | %(levelname)-8s | %(message)s",
-    datefmt="%Y-%m-%d %I:%M:%S %p"
-)
-handler.setFormatter(formatter)
-console_handler.setFormatter(color_formatter)
-logging.basicConfig(level=logging.INFO, handlers=[handler, console_handler])
-logger = logging.getLogger(__name__)
 
 # ========= HELPERS =========
 
@@ -258,7 +215,13 @@ urllib3.disable_warnings()
 def bytes_to_mb(value):
     return value / (1024 * 1024)
 
-def get_speed_history():
+def _decode_date(n):
+    year  = ((n >> 16) & 0xFF) + 1900
+    month = (n >> 8) & 0xFF
+    day   = n & 0xFF
+    return year, month, day
+
+def get_daily_history():
     router = requests.Session()
     router.auth   = ROUTER_AUTH
     router.verify = False
@@ -266,21 +229,39 @@ def get_speed_history():
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
         "Accept": "*/*",
         "Origin": ROUTER_URL,
-        "Referer": f"{ROUTER_URL}/bwm-realtime.asp",
+        "Referer": f"{ROUTER_URL}/bwm-ipt-daily.asp",
         "X-Requested-With": "XMLHttpRequest"
     }
     try:
         url = f"{ROUTER_URL}/update.cgi"
-        router.post(url, headers=headers, data="exec=ipt_bandwidth&arg0=start&_http_id=TIDe5b1505eeac7f67f", timeout=10)
-        r = router.post(url, headers=headers, data="exec=ipt_bandwidth&arg0=speed&_http_id=TIDe5b1505eeac7f67f", timeout=30)
-        match = re.search(r"speed_history\s*=\s*(\{.*?\});", r.text, re.DOTALL)
+        r = router.post(url, headers=headers, data="exec=ipt_bandwidth&arg0=daily&_http_id=TIDe5b1505eeac7f67f", timeout=30)
+        match = re.search(r"daily_history\s*=\s*(\[.*?\]);", r.text, re.DOTALL)
         if not match:
-            logger.warning("speed_history block not found in router response.")
-            return {}
+            logger.warning("daily_history block not found in router response.")
+            return []
         return demjson3.decode(match.group(1))
     except Exception as e:
-        logger.error(f"Error fetching speed history: {e}")
-        return {}
+        logger.error(f"Error fetching daily history: {e}")
+        return []
+
+def get_today_usage(daily_history):
+    now   = datetime.now(ZoneInfo("Africa/Cairo"))
+    today = (now.year, now.month - 1, now.day)
+    result = {}
+    for entry in daily_history:
+        if len(entry) < 4:
+            continue
+        y, m, d = _decode_date(entry[0])
+        if (y, m, d) != today:
+            continue
+        ip       = entry[1]
+        rx_bytes = entry[2]
+        tx_bytes = entry[3]
+        if ip not in result:
+            result[ip] = {"rx": 0, "tx": 0}
+        result[ip]["rx"] += rx_bytes
+        result[ip]["tx"] += tx_bytes
+    return result
 
 def _fetch_devlist():
     router = requests.Session()
@@ -290,12 +271,13 @@ def _fetch_devlist():
     data    = "exec=devlist&_http_id=TIDe5b1505eeac7f67f"
     headers = {"Content-Type": "text/plain;charset=UTF-8", "Referer": ROUTER_URL + "/", "Origin": ROUTER_URL}
     r = router.post(url, headers=headers, data=data, timeout=30)
-    dhcp_leases  = demjson3.decode(re.search(r"dhcpd_lease\s*=\s*(\[.*?\]);", r.text).group(1))
+    dhcp_leases   = demjson3.decode(re.search(r"dhcpd_lease\s*=\s*(\[.*?\]);", r.text).group(1))
     wireless_devs = demjson3.decode(re.search(r"wldev\s*=\s*(\[.*?\]);", r.text).group(1))
-    return dhcp_leases, wireless_devs
+    arp_list      = demjson3.decode(re.search(r"arplist\s*=\s*(\[.*?\]);", r.text).group(1))
+    return dhcp_leases, wireless_devs, arp_list
 
 def _fetch_devlist_and_discover(bot_instance):
-    dhcp_leases, wireless_devs = _fetch_devlist()
+    dhcp_leases, wireless_devs, arp_list = _fetch_devlist()
     new_devices = []
     for lease in dhcp_leases:
         mac      = lease[2].upper()
@@ -316,7 +298,7 @@ def _fetch_devlist_and_discover(bot_instance):
                 )
                 await channel.send(embed=embed)
         bot_instance.loop.create_task(_notify())
-    return dhcp_leases, wireless_devs
+    return dhcp_leases, wireless_devs, arp_list
 
 # ========= STATUS OF SERVICES =========
 def check_bot_services():
@@ -372,21 +354,18 @@ REPORT_TIME = time(hour=23, minute=59, tzinfo=ZoneInfo("Africa/Cairo"))
 async def daily_network_report():
     try:
         async with ROUTER_LOCK:
-            speed_history = await asyncio.to_thread(get_speed_history)
+            daily_history = await asyncio.to_thread(get_daily_history)
 
         async with ROUTER_LOCK:
-            dhcp_leases, _ = await asyncio.to_thread(_fetch_devlist)
+            dhcp_leases, _, _ = await asyncio.to_thread(_fetch_devlist)
 
         devices_info     = {lease[2].upper(): {"name": lease[0], "ip": lease[1]} for lease in dhcp_leases}
+        today_usage      = get_today_usage(daily_history)
         combined_data    = []
         total_day_usage_mb = 0.0
 
-        for ip, data in speed_history.items():
-            if not ip or ip.startswith("_") or ip.endswith(".0"):
-                continue
-            rx = data.get("rx_total", 0) if isinstance(data, dict) else data
-            tx = data.get("tx_total", 0) if isinstance(data, dict) else 0
-            usage_mb = bytes_to_mb(rx + tx)
+        for ip, data in today_usage.items():
+            usage_mb = bytes_to_mb(data["rx"] + data["tx"])
             if usage_mb < 0.1:
                 continue
             total_day_usage_mb += usage_mb
@@ -798,16 +777,17 @@ async def active(interaction: discord.Interaction):
     logger.info(f"Active devices status requested by {interaction.user}")
     try:
         async with ROUTER_LOCK:
-            dhcp_leases, wireless_devs = await asyncio.to_thread(
+            dhcp_leases, wireless_devs, arp_list = await asyncio.to_thread(
                 lambda: _fetch_devlist_and_discover(bot)
             )
 
         active_signals = {dev[1].upper(): dev[2] for dev in wireless_devs}
+        arp_active     = {entry[1].upper() for entry in arp_list}
         devices_info   = {lease[2].upper(): {"name": lease[0], "ip": lease[1]} for lease in dhcp_leases}
         combined_data  = []
 
         for mac, info in devices_info.items():
-            is_online = mac in active_signals
+            is_online = mac in active_signals and mac in arp_active
             rssi      = active_signals.get(mac, None)
             is_banned = mac in BANNED_MACS
 
@@ -860,23 +840,19 @@ async def netstat(interaction: discord.Interaction):
     logger.info(f"Network usage status requested by {interaction.user}")
     try:
         async with ROUTER_LOCK:
-            speed_history = await asyncio.to_thread(get_speed_history)
+            daily_history = await asyncio.to_thread(get_daily_history)
 
         async with ROUTER_LOCK:
-            dhcp_leases, _ = await asyncio.to_thread(_fetch_devlist)
+            dhcp_leases, _, _ = await asyncio.to_thread(_fetch_devlist)
 
-        devices_info    = {lease[2].upper(): {"name": lease[0], "ip": lease[1]} for lease in dhcp_leases}
-        combined_data   = []
+        devices_info     = {lease[2].upper(): {"name": lease[0], "ip": lease[1]} for lease in dhcp_leases}
+        today_usage      = get_today_usage(daily_history)
+        combined_data    = []
         total_traffic_mb = 0.0
 
-        for ip, data in speed_history.items():
-            if not ip or ip.startswith("_") or ip.endswith(".0"):
-                continue
-            rx       = data.get("rx_total", 0) if isinstance(data, dict) else data
-            tx       = data.get("tx_total", 0) if isinstance(data, dict) else 0
-            usage_mb = bytes_to_mb(rx + tx)
+        for ip, data in today_usage.items():
+            usage_mb = bytes_to_mb(data["rx"] + data["tx"])
             total_traffic_mb += usage_mb
-
             target_mac = next((mac for mac, info in devices_info.items() if info["ip"] == ip), None)
             if not target_mac:
                 continue
