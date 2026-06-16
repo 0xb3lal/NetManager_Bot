@@ -811,13 +811,26 @@ async def active(interaction: discord.Interaction):
 
         combined_data.sort(key=lambda x: (x["online_sort"], x["signal"]), reverse=True)
 
+        online  = [d for d in combined_data if d["icon"] == "🟢"]
+        offline = [d for d in combined_data if d["icon"] == "🔴"]
+        banned  = [d for d in combined_data if d["icon"] == "⛔"]
+
         if combined_data:
-            lines = [
-                f"{dev['icon']} `{dev['name'][:12].ljust(12)} | 📶{dev['signal'].rjust(4)}`"
-                for dev in combined_data[:15]
-            ]
+            def fmt(dev):
+                return f"{dev['icon']} `{dev['name'][:12].ljust(12)} | 📶{dev['signal'].rjust(4)}`"
+
+            lines = []
+            if online:
+                lines += [fmt(d) for d in online]
+            if offline:
+                lines += ["─────────────────────"]
+                lines += [fmt(d) for d in offline]
+            if banned:
+                lines += ["─────────────────────"]
+                lines += [fmt(d) for d in banned]
+
             embed = discord.Embed(
-                title=f"`📡` Active Devices ({len(combined_data)} Devices)",
+                title=f"`📡` Active Devices ({len(arp_active)} Devices)",
                 description="\n".join(lines),
                 color=0x2ecc71
             )
@@ -831,7 +844,7 @@ async def active(interaction: discord.Interaction):
             await interaction.followup.send("`❌` Error compiling active devices status.")
         except:
             pass
-
+        
 # --------- /netstat ---------
 @bot.tree.command(name="netstat", description="Show all recognized devices and their usage")
 async def netstat(interaction: discord.Interaction):
