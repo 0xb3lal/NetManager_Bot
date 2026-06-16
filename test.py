@@ -221,6 +221,30 @@ def _decode_date(n):
     day   = n & 0xFF
     return year, month, day
 
+def get_speed_history():
+    router = requests.Session()
+    router.auth   = ROUTER_AUTH
+    router.verify = False
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+        "Accept": "*/*",
+        "Origin": ROUTER_URL,
+        "Referer": f"{ROUTER_URL}/bwm-ipt-24.asp",
+        "X-Requested-With": "XMLHttpRequest"
+    }
+    try:
+        url = f"{ROUTER_URL}/update.cgi"
+        router.post(url, headers=headers, data="exec=ipt_bandwidth&arg0=start&_http_id=TIDe5b1505eeac7f67f", timeout=10)
+        r = router.post(url, headers=headers, data="exec=ipt_bandwidth&arg0=speed&_http_id=TIDe5b1505eeac7f67f", timeout=30)
+        match = re.search(r"speed_history\s*=\s*(\{.*?\});", r.text, re.DOTALL)
+        if not match:
+            logger.warning("speed_history block not found in router response.")
+            return {}
+        return demjson3.decode(match.group(1))
+    except Exception as e:
+        logger.error(f"Error fetching speed history: {e}")
+        return {}
+
 def get_daily_history():
     router = requests.Session()
     router.auth   = ROUTER_AUTH
@@ -261,6 +285,22 @@ def get_today_usage(daily_history):
             result[ip] = {"rx": 0, "tx": 0}
         result[ip]["rx"] += rx_bytes
         result[ip]["tx"] += tx_bytes
+    return result
+
+def get_today_combined(speed_history, daily_history):
+
+    jffs_today = get_today_usage(daily_history)
+    result = {}
+    for ip, data in jffs_today.items():
+        result[ip] = data["rx"] + data["tx"]
+    for ip, data in speed_history.items():
+        if not ip or ip.startswith("_") or ip.endswith(".0"):
+            continue
+        rx = data.get("rx_total", 0) if isinstance(data, dict) else data
+        tx = data.get("tx_total", 0) if isinstance(data, dict) else 0
+        speed_total = rx + tx
+        result[ip] = max(result.get(ip, 0), speed_total)
+
     return result
 
 def _fetch_devlist():
@@ -348,29 +388,35 @@ def _router_heartbeat():
         logger.debug(f"Router heartbeat failed: {e}")
 
 # ========= DAILY REPORT =========
-REPORT_TIME = time(hour=23, minute=59, tzinfo=ZoneInfo("Africa/Cairo"))
+REPORT_TIME = time(hour=23, minute=55, tzinfo=ZoneInfo("Africa/Cairo"))
 
 @tasks.loop(time=REPORT_TIME)
 async def daily_network_report():
     try:
+
+        async with ROUTER_LOCK:
+            speed_history = await asyncio.to_thread(get_speed_history)
+
         async with ROUTER_LOCK:
             daily_history = await asyncio.to_thread(get_daily_history)
 
         async with ROUTER_LOCK:
             dhcp_leases, _, _ = await asyncio.to_thread(_fetch_devlist)
 
-        devices_info     = {lease[2].upper(): {"name": lease[0], "ip": lease[1]} for lease in dhcp_leases}
-        today_usage      = get_today_usage(daily_history)
-        combined_data    = []
+        devices_info       = {lease[2].upper(): {"name": lease[0], "ip": lease[1]} for lease in dhcp_leases}
+        combined_usage     = get_today_combined(speed_history, daily_history)
+        combined_data      = []
         total_day_usage_mb = 0.0
 
-        for ip, data in today_usage.items():
-            usage_mb = bytes_to_mb(data["rx"] + data["tx"])
+        for ip, total_bytes in combined_usage.items():
+            usage_mb = bytes_to_mb(total_bytes)
             if usage_mb < 0.1:
                 continue
             total_day_usage_mb += usage_mb
             target_mac = next((mac for mac, info in devices_info.items() if info["ip"] == ip), None)
-            raw_name   = devices_info.get(target_mac, {}).get("name", "Unknown") if target_mac else "Unknown"
+            if not target_mac:
+                continue
+            raw_name   = devices_info[target_mac]["name"]
             final_name = MACS_LIST.get(target_mac, raw_name)
             combined_data.append({"name": final_name, "usage": usage_mb})
 
@@ -844,7 +890,7 @@ async def active(interaction: discord.Interaction):
             await interaction.followup.send("`❌` Error compiling active devices status.")
         except:
             pass
-        
+
 # --------- /netstat ---------
 @bot.tree.command(name="netstat", description="Show all recognized devices and their usage")
 async def netstat(interaction: discord.Interaction):
@@ -852,6 +898,10 @@ async def netstat(interaction: discord.Interaction):
         return
     logger.info(f"Network usage status requested by {interaction.user}")
     try:
+
+        async with ROUTER_LOCK:
+            speed_history = await asyncio.to_thread(get_speed_history)
+
         async with ROUTER_LOCK:
             daily_history = await asyncio.to_thread(get_daily_history)
 
@@ -859,12 +909,14 @@ async def netstat(interaction: discord.Interaction):
             dhcp_leases, _, _ = await asyncio.to_thread(_fetch_devlist)
 
         devices_info     = {lease[2].upper(): {"name": lease[0], "ip": lease[1]} for lease in dhcp_leases}
-        today_usage      = get_today_usage(daily_history)
+        combined_usage   = get_today_combined(speed_history, daily_history)
         combined_data    = []
         total_traffic_mb = 0.0
 
-        for ip, data in today_usage.items():
-            usage_mb = bytes_to_mb(data["rx"] + data["tx"])
+        for ip, total_bytes in combined_usage.items():
+            usage_mb = bytes_to_mb(total_bytes)
+            if usage_mb < 0.1:
+                continue
             total_traffic_mb += usage_mb
             target_mac = next((mac for mac, info in devices_info.items() if info["ip"] == ip), None)
             if not target_mac:
