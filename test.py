@@ -341,6 +341,59 @@ def _fetch_devlist_and_discover(bot_instance):
     return dhcp_leases, wireless_devs, arp_list
 
 # ========= STATUS OF SERVICES =========
+def _check_jffs2():
+    try:
+        router = requests.Session()
+        router.auth = ROUTER_AUTH
+        headers = {"Content-Type": "text/plain;charset=UTF-8", "Referer": ROUTER_URL + "/", "Origin": ROUTER_URL}
+        r = router.post(
+            f"{ROUTER_URL}/shell.cgi",
+            headers=headers,
+            data="action=execute&command=df -h\n&_http_id=TIDe5b1505eeac7f67f",
+            timeout=10
+        )
+        if "/jffs" not in r.text:
+            return "OFFLINE"
+        match = re.search(r"/jffs\s+(\d+)K\s+(\d+)K\s+(\d+)K\s+(\d+)%", r.text)
+        if match:
+            used_pct = int(match.group(4))
+            if used_pct >= 90:
+                return "CRITICAL"
+            return "ONLINE"
+        return "ONLINE"
+    except Exception as e:
+        logger.error(f"JFFS2 check failed: {e}")
+        return "TIMEOUT"
+
+def _check_wan_status():
+    try:
+        router = requests.Session()
+        router.auth = ROUTER_AUTH
+        headers = {"Content-Type": "text/plain;charset=UTF-8", "Referer": ROUTER_URL + "/", "Origin": ROUTER_URL}
+        r = router.post(
+            f"{ROUTER_URL}/shell.cgi",
+            headers=headers,
+            data="action=execute&command=nvram get wan_ipaddr\n&_http_id=TIDe5b1505eeac7f67f",
+            timeout=10
+        )
+        match = re.search(r"(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})", r.text)
+        if match and match.group(1) != "0.0.0.0":
+            return "CONNECTED"
+        return "DISCONNECTED"
+    except Exception as e:
+        logger.error(f"WAN status check failed: {e}")
+        return "TIMEOUT"
+
+def _check_ip_traffic_service():
+    try:
+        speed_data = get_speed_history()
+        if speed_data and isinstance(speed_data, dict) and len(speed_data) > 0:
+            return "ACTIVE"
+        return "EMPTY"
+    except Exception as e:
+        logger.error(f"IP Traffic check failed: {e}")
+        return "ERROR"
+
 def check_bot_services():
     status = {}
     try:
@@ -350,22 +403,25 @@ def check_bot_services():
         r = router.post(
             f"{ROUTER_URL}/shell.cgi",
             headers=headers,
-            data="action=execute&command=df -h\n&_http_id=TIDe5b1505eeac7f67f",
+            data="action=execute&command=true\n&_http_id=TIDe5b1505eeac7f67f",
             timeout=10
         )
-        status["jffs2"] = "ONLINE" if "/jffs" in r.text else "OFFLINE"
-    except:
-        status["jffs2"] = "TIMEOUT"
+        status["link"] = "OK" if r.status_code == 200 else "AUTH_ERR"
+    except Exception as e:
+        logger.error(f"Router link check failed: {e}")
+        status["link"] = "UNREACHABLE"
+
+    status["jffs2"]      = _check_jffs2()
+    status["wan"]        = _check_wan_status()
+    status["ip_traffic"] = _check_ip_traffic_service()
+
     try:
         r = requests.get(f"{RADIUS_URL}/radiusmanager/user.php", timeout=10)
         status["radius"] = "READY" if r.status_code == 200 else "DOWN"
-    except:
+    except Exception as e:
+        logger.error(f"Radius check failed: {e}")
         status["radius"] = "DOWN"
-    try:
-        r = requests.get(ROUTER_URL, auth=ROUTER_AUTH, timeout=10)
-        status["link"] = "OK" if r.status_code == 200 else "AUTH_ERR"
-    except:
-        status["link"] = "UNREACHABLE"
+
     return status
 
 # ========= ROUTER HEARTBEAT =========
@@ -574,6 +630,8 @@ class MyBot(discord.Client):
             heartbeat_task.start()
         if not discord_keepalive_task.is_running():
             discord_keepalive_task.start()
+        if not device_discovery_task.is_running():
+            device_discovery_task.start()
 
     async def on_disconnect(self):
         logger.warning("Bot disconnected from Discord Gateway. Waiting for automatic reconnect...")
@@ -823,9 +881,7 @@ async def active(interaction: discord.Interaction):
     logger.info(f"Active devices status requested by {interaction.user}")
     try:
         async with ROUTER_LOCK:
-            dhcp_leases, wireless_devs, arp_list = await asyncio.to_thread(
-                lambda: _fetch_devlist_and_discover(bot)
-            )
+            dhcp_leases, wireless_devs, arp_list = await asyncio.to_thread(_fetch_devlist)
 
         active_signals = {dev[1].upper(): dev[2] for dev in wireless_devs}
         arp_active     = {entry[1].upper() for entry in arp_list}
@@ -1011,20 +1067,22 @@ async def botstatus(interaction: discord.Interaction):
 
     def get_status_emoji(s):
         s = s.upper()
-        if s in ["ONLINE", "READY", "OK"]:
+        if s in ["OK", "ONLINE", "READY", "ACTIVE", "CONNECTED"]:
             return "🟢"
-        if s in ["OFFLINE", "DOWN", "AUTH_ERR"]:
+        if s in ["OFFLINE", "DOWN", "AUTH_ERR", "DISCONNECTED", "ERROR", "CRITICAL"]:
             return "🔴"
         return "⚪"
 
-    all_ok     = all(v in ["ONLINE", "READY", "OK"] for v in health.values())
+    all_ok = all(v in ["OK", "ONLINE", "READY", "ACTIVE", "CONNECTED"] for v in health.values())
     embed_color = 0x2ecc71 if all_ok else 0xe74c3c
     title_icon  = "✅" if all_ok else "⚠️"
     status_box  = (
         f"```\n"
-        f"{'JFFS2 Storage':<14} | {health['jffs2']:<8} {get_status_emoji(health['jffs2'])}\n"
-        f"{'Radius Dash':<14} | {health['radius']:<8} {get_status_emoji(health['radius'])}\n"
-        f"{'Router Link':<14} | {health['link']:<8} {get_status_emoji(health['link'])}\n"
+        f"{'Router Link':<14} | {health['link']:<12} {get_status_emoji(health['link'])}\n"
+        f"{'Wan':<14} | {health['wan']:<12} {get_status_emoji(health['wan'])}\n"
+        f"{'JFFS2':<14} | {health['jffs2']:<12} {get_status_emoji(health['jffs2'])}\n"
+        f"{'IP Traffic':<14} | {health['ip_traffic']:<12} {get_status_emoji(health['ip_traffic'])}\n"
+        f"{'Radius Dash':<14} | {health['radius']:<12} {get_status_emoji(health['radius'])}\n"
         f"```"
     )
     logger.info(f"Bot status requested by {interaction.user}")
@@ -1076,6 +1134,23 @@ async def discord_keepalive_task():
 async def before_discord_keepalive():
     await bot.wait_until_ready()
     logger.info("Discord keepalive task started (prevents idle Gateway disconnects).")
+
+@tasks.loop(minutes=5.0)
+async def device_discovery_task():
+    if ROUTER_LOCK.locked():
+        logger.debug("Device discovery skipped (router busy with another task).")
+        return
+    try:
+        async with ROUTER_LOCK:
+            await asyncio.to_thread(lambda: _fetch_devlist_and_discover(bot))
+        logger.debug("Scheduled device discovery check completed.")
+    except Exception as e:
+        logger.error(f"Error in device_discovery_task: {e}")
+
+@device_discovery_task.before_loop
+async def before_device_discovery():
+    await bot.wait_until_ready()
+    logger.info("Device discovery task started (checks for new devices every 5 minutes).")
 
 # ========= MAIN =========
 async def main():
