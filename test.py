@@ -27,13 +27,15 @@ ROUTER_AUTH  = (os.getenv("ROUTER_USER"), os.getenv("ROUTER_PASS"))
 DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
 GUILD_ID     = discord.Object(id=1475047474832867338)
 CHANNEL_ID   = int(os.getenv("CHANNEL_ID")) if os.getenv("CHANNEL_ID") else 0
+WIFI_IFACE   = os.getenv("WIFI_IFACE", "eth1")
 
 # ========= DB CONFIG =========
 db.init_db()
-THRESHOLD   = db.get_threshold()
-BANNED_MACS = db.get_banned()
-MACS_LIST   = db.get_devices()
-ALLOWED_MACS = db.get_allowed()
+THRESHOLD      = db.get_threshold()
+BANNED_MACS    = db.get_banned()
+MACS_LIST      = db.get_devices()
+ALLOWED_MACS   = db.get_allowed()
+LOCKDOWN_STATE = db.get_lockdown_state()
 
 # ========= HELPERS =========
 
@@ -42,6 +44,18 @@ def hex_md5(data):
 
 def hex_hmac_md5(key, data):
     return _hmac.new(key.encode(), data.encode(), hashlib.md5).hexdigest()
+
+def parse_traffic_to_gb(traffic_str):
+    # Radius dashboard returns values with mixed units (e.g. "370.7 MB", "1.5 GB"),
+    # so the unit has to be normalized before comparing against THRESHOLD (in GB).
+    parts = traffic_str.strip().split()
+    value = float(parts[0])
+    unit  = parts[1].upper() if len(parts) > 1 else "GB"
+    if unit.startswith("MB"):
+        return value / 1024
+    elif unit.startswith("KB"):
+        return value / (1024 * 1024)
+    return value
 
 async def safe_defer(interaction: discord.Interaction, thinking: bool = False) -> bool:
     if interaction.response.is_done():
@@ -86,7 +100,36 @@ def run_cmd(router, headers, cmd, _retry=True):
         logger.error(f"Unexpected error in run_cmd: {e}")
         return False
 
+def run_cmd_output(router, headers, cmd, timeout=15):
+    data = f"action=execute&command={cmd}\n&_http_id=TIDe5b1505eeac7f67f"
+    try:
+        response = router.post(f"{ROUTER_URL}/shell.cgi", headers=headers, data=data, timeout=timeout)
+        if response.status_code == 200:
+            return response.text
+        logger.error(f"Router returned error code {response.status_code} for command: {cmd}")
+        return None
+    except (ReadTimeout, ConnectionError) as e:
+        logger.error(f"Router Connection Error while executing '{cmd}': {e}")
+        return None
+    except Exception as e:
+        logger.error(f"Unexpected error in run_cmd_output: {e}")
+        return None
+
 # ========= LOCKDOWN LOGIC =========
+def _kick_non_allowed_devices(router, headers):
+    # Devices already connected before the whitelist rule is applied keep an existing
+    # session on the router; iptables only stops new traffic, so anything already
+    # associated needs to be deauthenticated to force a reconnect against the new rules.
+    output = run_cmd_output(router, headers, f"wl -i {WIFI_IFACE} assoclist")
+    if not output:
+        return
+    connected_macs = re.findall(r"([0-9A-Fa-f]{2}(?::[0-9A-Fa-f]{2}){5})", output)
+    for mac in connected_macs:
+        mac = mac.upper()
+        if mac not in ALLOWED_MACS:
+            logger.info(f"Kicking non-allowed device during lockdown: {mac}")
+            run_cmd(router, headers, f"wl -i {WIFI_IFACE} deauthenticate {mac}")
+
 def enable_lockdown(router, headers, force_lock=False):
     mode = "FORCE (Whitelist only)" if force_lock else "NORMAL (Banning list)"
     logger.info(f"Applying Firewall Lockdown: Mode={mode}")
@@ -112,13 +155,16 @@ def enable_lockdown(router, headers, force_lock=False):
     run_cmd(router, headers, "iptables -I FORWARD 1 -i br0 -j LOCKDOWN")
     logger.info("Firewall rules synchronized successfully.")
 
+    if force_lock:
+        _kick_non_allowed_devices(router, headers)
+
 def ban_mac(router, headers, mac):
     mac = mac.upper()
     if mac not in BANNED_MACS:
         BANNED_MACS.add(mac)
         db.ban_device(mac)
         logger.info(f"Internal: Added {mac} to banned set.")
-        enable_lockdown(router, headers, force_lock=False)
+        enable_lockdown(router, headers, force_lock=LOCKDOWN_STATE)
     else:
         logger.warning(f"Internal: {mac} is already in banned set, skipping rewrite.")
 
@@ -128,7 +174,7 @@ def unban_mac(router, headers, mac):
         BANNED_MACS.remove(mac)
         db.unban_device(mac)
         logger.info(f"Internal: Removed {mac} from banned set.")
-        enable_lockdown(router, headers, force_lock=False)
+        enable_lockdown(router, headers, force_lock=LOCKDOWN_STATE)
     else:
         logger.warning(f"Internal: Attempted to unban {mac} but it wasn't in the list.")
 
@@ -148,14 +194,19 @@ def _fetch_radius_traffic():
     return None
 
 def _apply_lockdown_for_traffic(traffic_value):
+    global LOCKDOWN_STATE
     router  = requests.Session()
     router.auth = ROUTER_AUTH
     headers = {"Content-Type": "text/plain;charset=UTF-8", "Referer": ROUTER_URL + "/", "Origin": ROUTER_URL}
     if traffic_value < THRESHOLD:
         enable_lockdown(router, headers, force_lock=True)
+        LOCKDOWN_STATE = True
+        db.set_lockdown_state(True)
         return "`❌` System Lockdown", 0xff4747
     else:
         enable_lockdown(router, headers, force_lock=False)
+        LOCKDOWN_STATE = False
+        db.set_lockdown_state(False)
         return "`✅` System Normal", 0x47ff7e
 
 async def async_check_and_lock(bot_instance):
@@ -163,7 +214,7 @@ async def async_check_and_lock(bot_instance):
         available_traffic = await asyncio.to_thread(_fetch_radius_traffic)
         if not available_traffic:
             return
-        traffic_value = float(available_traffic.split()[0])
+        traffic_value = parse_traffic_to_gb(available_traffic)
 
         async with ROUTER_LOCK:
             e_title, e_color = await asyncio.to_thread(_apply_lockdown_for_traffic, traffic_value)
@@ -623,7 +674,7 @@ class BulkBlockSelect(discord.ui.Select):
                     added.append(mac)
                     logger.info(f"Internal: Added {mac} to banned set.")
             if added:
-                enable_lockdown(router, headers, force_lock=False)
+                enable_lockdown(router, headers, force_lock=LOCKDOWN_STATE)
             return [MACS_LIST.get(m, "Unknown") for m in selected_macs]
 
         async with ROUTER_LOCK:
@@ -801,16 +852,16 @@ class MyBot(discord.Client):
         logger.info("Discord Gateway session resumed successfully. Bot is fully operational.")
 
     async def on_ready(self):
-        global BANNED_MACS, MACS_LIST, ALLOWED_MACS, THRESHOLD
+        global BANNED_MACS, MACS_LIST, ALLOWED_MACS, THRESHOLD, LOCKDOWN_STATE
         logger.info(f"Bot ready: {self.user}")
-        BANNED_MACS  = db.get_banned()
-        MACS_LIST    = db.get_devices()
-        ALLOWED_MACS = db.get_allowed()
-        THRESHOLD    = db.get_threshold()
-        if BANNED_MACS:
-            logger.info(f"Loaded {len(BANNED_MACS)} banned MACs from DB, reapplying firewall rules...")
-            async with ROUTER_LOCK:
-                await asyncio.to_thread(_reapply_banned_macs)
+        BANNED_MACS    = db.get_banned()
+        MACS_LIST      = db.get_devices()
+        ALLOWED_MACS   = db.get_allowed()
+        THRESHOLD      = db.get_threshold()
+        LOCKDOWN_STATE = db.get_lockdown_state()
+        logger.info(f"Reapplying firewall rules on startup (lockdown_state={LOCKDOWN_STATE})...")
+        async with ROUTER_LOCK:
+            await asyncio.to_thread(_reapply_firewall_state)
 
 # ========= ROUTER LOCK =========
 ROUTER_LOCK = asyncio.Lock()
@@ -818,11 +869,11 @@ ROUTER_LOCK = asyncio.Lock()
 bot = MyBot()
 
 # ========= HELPERS FOR COMMANDS =========
-def _reapply_banned_macs():
+def _reapply_firewall_state():
     router  = requests.Session()
     router.auth = ROUTER_AUTH
     headers = {"Content-Type": "text/plain;charset=UTF-8", "Referer": ROUTER_URL + "/", "Origin": ROUTER_URL}
-    enable_lockdown(router, headers, force_lock=False)
+    enable_lockdown(router, headers, force_lock=LOCKDOWN_STATE)
 
 async def mac_autocomplete(interaction: discord.Interaction, current: str):
     choices = [

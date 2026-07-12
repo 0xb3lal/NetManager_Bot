@@ -51,6 +51,9 @@ def init_db():
         conn.execute(
             "INSERT OR IGNORE INTO settings (key, value) VALUES ('threshold', '3.0')"
         )
+        conn.execute(
+            "INSERT OR IGNORE INTO settings (key, value) VALUES ('lockdown_state', '0')"
+        )
 
     logger.info("Database initialized successfully.")
 
@@ -146,3 +149,25 @@ def set_threshold(value: float):
         logger.info(f"Threshold updated to {value} GB")
     except Exception as e:
         logger.error(f"Error saving threshold: {e}")
+
+def get_lockdown_state() -> bool:
+    try:
+        with get_db() as conn:
+            row = conn.execute(
+                "SELECT value FROM settings WHERE key = 'lockdown_state'"
+            ).fetchone()
+        return row["value"] == "1" if row else False
+    except Exception as e:
+        logger.error(f"Error loading lockdown state: {e}")
+        return False
+
+def set_lockdown_state(state: bool):
+    try:
+        with get_db() as conn:
+            conn.execute(
+                "INSERT OR REPLACE INTO settings (key, value) VALUES ('lockdown_state', ?)",
+                ("1" if state else "0",)
+            )
+        logger.info(f"Lockdown state updated to {state}")
+    except Exception as e:
+        logger.error(f"Error saving lockdown state: {e}")

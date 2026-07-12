@@ -72,15 +72,19 @@ def run_cmd(router, headers, cmd, _retry=True):
         response = router.post(f"{ROUTER_URL}/shell.cgi", headers=headers, data=data, timeout=30)
         if response.status_code == 200:
             logger.debug(f"Router executed: {cmd} successfully.")
+            return True
         else:
             logger.error(f"Router returned error code {response.status_code} for command: {cmd}")
+            return False
     except (ReadTimeout, ConnectionError) as e:
         logger.error(f"Router Connection Error while executing '{cmd}': {e}")
         if _retry:
             logger.warning(f"Retrying command once: {cmd}")
-            run_cmd(router, headers, cmd, _retry=False)
+            return run_cmd(router, headers, cmd, _retry=False)
+        return False
     except Exception as e:
         logger.error(f"Unexpected error in run_cmd: {e}")
+        return False
 
 # ========= LOCKDOWN LOGIC =========
 def enable_lockdown(router, headers, force_lock=False):
@@ -424,6 +428,89 @@ def check_bot_services():
 
     return status
 
+# ========= ROUTER REBOOT =========
+def _reboot_router():
+    router = requests.Session()
+    router.auth   = ROUTER_AUTH
+    router.verify = False
+    headers = {"Content-Type": "text/plain;charset=UTF-8", "Referer": ROUTER_URL + "/", "Origin": ROUTER_URL}
+    data = "action=execute&command=reboot\n&_http_id=TIDe5b1505eeac7f67f"
+    try:
+        response = router.post(f"{ROUTER_URL}/shell.cgi", headers=headers, data=data, timeout=10)
+        if response.status_code == 200:
+            logger.warning("Reboot command acknowledged by router (HTTP 200).")
+            return True
+        logger.error(f"Router responded with unexpected status {response.status_code} for reboot command.")
+        return False
+    except (ReadTimeout, ConnectionError) as e:
+        # The router cuts its network/HTTP stack mid-response once it actually executes
+        # the reboot, so a dropped connection here is the EXPECTED signal of success,
+        # not a failure. Do not retry: the device is already going down.
+        logger.warning(f"Connection dropped while router was rebooting (expected): {e}")
+        return True
+    except Exception as e:
+        logger.error(f"Failed to send reboot command: {e}")
+        return False
+
+def _is_router_alive():
+    try:
+        router = requests.Session()
+        router.auth   = ROUTER_AUTH
+        router.verify = False
+        headers = {"Referer": f"{ROUTER_URL}/", "User-Agent": "Mozilla/5.0"}
+        r = router.post(
+            f"{ROUTER_URL}/shell.cgi",
+            headers=headers,
+            data="action=execute&command=true\n&_http_id=TIDe5b1505eeac7f67f",
+            timeout=5
+        )
+        return r.status_code == 200
+    except Exception:
+        return False
+
+async def _wait_for_router_and_notify(channel, user_mention):
+    # Give the router a moment to actually go down before polling it
+    await asyncio.sleep(15)
+    max_wait = 300   # stop waiting after 5 minutes
+    interval = 10
+    waited   = 0
+    logger.info("Started watching for router recovery after manual reboot.")
+    while waited < max_wait:
+        try:
+            async with ROUTER_LOCK:
+                alive = await asyncio.to_thread(_is_router_alive)
+        except Exception as e:
+            logger.error(f"Error while checking router recovery: {e}")
+            alive = False
+
+        logger.debug(f"Router recovery check #{waited // interval + 1}: alive={alive} (waited {waited}s/{max_wait}s)")
+
+        if alive:
+            embed = discord.Embed(
+                title="`✅` Router is Back Online",
+                description=f"{user_mention} I'm up! The router has rebooted successfully and is responding again.",
+                color=0x2ecc71
+            )
+            try:
+                await channel.send(embed=embed)
+            except Exception as e:
+                logger.error(f"Failed to send router recovery notice: {e}")
+            logger.info("Router recovery confirmed and notified.")
+            return
+        await asyncio.sleep(interval)
+        waited += interval
+
+    try:
+        embed = discord.Embed(
+            title="`⚠️` Router Still Unreachable",
+            description=f"{user_mention} The router hasn't come back online {max_wait // 60} minutes after the reboot. Please check it manually.",
+            color=0xe67e22
+        )
+        await channel.send(embed=embed)
+    except Exception as e:
+        logger.error(f"Failed to send router recovery timeout notice: {e}")
+    logger.warning("Router did not come back online within the expected window.")
+
 # ========= ROUTER HEARTBEAT =========
 def _router_heartbeat():
     try:
@@ -603,6 +690,80 @@ class BulkUnblockView(discord.ui.View):
     def __init__(self, options):
         super().__init__(timeout=60)
         self.add_item(BulkUnblockSelect(options))
+
+# ========= Reboot Confirmation SETUP =========
+class RebootConfirmView(discord.ui.View):
+    def __init__(self, requester_id):
+        super().__init__(timeout=30)
+        self.requester_id = requester_id
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id != self.requester_id:
+            await interaction.response.send_message("`⚠️` Only the user who issued this command can confirm it.", ephemeral=True)
+            return False
+        return True
+
+    async def on_timeout(self):
+        for child in self.children:
+            child.disabled = True
+
+    @discord.ui.button(label="Confirm", style=discord.ButtonStyle.danger, emoji="✅")
+    async def confirm(self, interaction: discord.Interaction, button: discord.ui.Button):
+        for child in self.children:
+            child.disabled = True
+
+        try:
+            await interaction.response.edit_message(content="`🔄` Reboot confirmed. Sending the command to the router now...", view=self)
+        except Exception as e:
+            logger.error(f"Failed to edit reboot confirmation message: {e}")
+
+        logger.warning(f"Router reboot CONFIRMED by {interaction.user}")
+
+        # Give Discord a few seconds to fully deliver/render the confirmation message
+        # before we trigger the actual (disruptive) reboot on the router.
+        logger.info("Waiting 5 seconds before sending the actual reboot command...")
+        await asyncio.sleep(5)
+        logger.info("Done waiting. Sending the reboot command to the router now.")
+
+        try:
+            async with ROUTER_LOCK:
+                success = await asyncio.to_thread(_reboot_router)
+        except Exception as e:
+            logger.exception(f"Unexpected error while sending reboot command: {e}")
+            success = False
+
+        # Tell the user the immediate outcome via a direct channel message (same
+        # reliable mechanism the recovery watcher uses), instead of relying on the
+        # interaction's webhook/follow-up token which can silently misbehave.
+        try:
+            if success:
+                logger.info("Sending 'reboot command sent successfully' message to channel.")
+                await interaction.channel.send(f"{interaction.user.mention} `✅` Reboot command was sent successfully.")
+            else:
+                logger.info("Sending 'reboot command failed' message to channel.")
+                await interaction.channel.send(f"{interaction.user.mention} `❌` Failed to send the reboot command. Check logs.")
+        except Exception as e:
+            logger.error(f"Failed to send reboot result message: {e}")
+
+        # Schedule the recovery watcher independently of the message above,
+        # so a Discord API hiccup never blocks the "router is back" notification.
+        if success:
+            try:
+                asyncio.create_task(_wait_for_router_and_notify(interaction.channel, interaction.user.mention))
+                logger.info("Router recovery watcher scheduled.")
+            except Exception as e:
+                logger.exception(f"Failed to schedule router recovery watcher: {e}")
+        else:
+            logger.warning("Skipping recovery watcher because the reboot command was not confirmed as sent.")
+
+        self.stop()
+
+    @discord.ui.button(label="Cancel", style=discord.ButtonStyle.secondary, emoji="✖️")
+    async def cancel(self, interaction: discord.Interaction, button: discord.ui.Button):
+        for child in self.children:
+            child.disabled = True
+        await interaction.response.edit_message(content="`✖️` Reboot cancelled.", view=self)
+        self.stop()
 
 # ========= DISCORD BOT SETUP =========
 class MyBot(discord.Client):
@@ -1092,6 +1253,18 @@ async def botstatus(interaction: discord.Interaction):
         color=embed_color
     )
     await interaction.followup.send(embed=embed)
+
+# --------- /reboot ---------
+@bot.tree.command(name="reboot", description="Reboot the router (requires confirmation)")
+async def reboot_router(interaction: discord.Interaction):
+    try:
+        await interaction.response.send_message(
+            "`⚠️` **Are you sure you want to reboot the router?**\nIt will be unreachable for a minute or two.",
+            view=RebootConfirmView(interaction.user.id)
+        )
+        logger.info(f"Reboot requested by {interaction.user} (awaiting confirmation)")
+    except Exception as e:
+        logger.error(f"Error showing reboot confirmation: {e}")
 
 # ========= TASKS =========
 @tasks.loop(minutes=1.0)
