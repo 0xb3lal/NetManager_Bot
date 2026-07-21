@@ -130,20 +130,22 @@ Type=simple
 User=belal
 ExecStart=/usr/bin/autossh -M 0 \
   -i /home/belal/.ssh/tunnel_key \
-  -o "ServerAliveInterval=10" \
-  -o "ServerAliveCountMax=2" \
+  -o "ServerAliveInterval=5" \
+  -o "ServerAliveCountMax=1" \
   -o "ExitOnForwardFailure=yes" \
   -o "StrictHostKeyChecking=no" \
   -o "TCPKeepAlive=yes" \
+  -o "BatchMode=yes" \
   -N \
   -R 0.0.0.0:7080:192.168.1.1:7080 \
   -R 0.0.0.0:8080:10.0.0.254:80 \
-  root@YOUR_VPS_IP
+  root@81.17.98.226
 Restart=always
 RestartSec=5
 
 [Install]
 WantedBy=multi-user.target
+
 ```
 
 **Important**: Replace `belal` with your username, `/home/belal/.ssh/tunnel_key` with your key path, and `YOUR_VPS_IP` with your actual VPS IP.
