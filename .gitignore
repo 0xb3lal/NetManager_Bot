@@ -5,3 +5,4 @@ venv/
 .vscode/
 netmanager.db
 __pycache__/
+test/

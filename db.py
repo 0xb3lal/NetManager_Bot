@@ -17,10 +17,20 @@ SEED_DEVICES = [
     ("A8:6A:86:FE:B7:80", "Redmi-A3", 0),
 ]
 
+# Default daily-per-device usage cap (GB), used when a device has no custom override.
+DEFAULT_DAILY_LIMIT_GB = 1.5
+
+
 def get_db():
     conn = sqlite3.connect(DB_FILE)
     conn.row_factory = sqlite3.Row
     return conn
+
+
+def _column_exists(conn, table: str, column: str) -> bool:
+    rows = conn.execute(f"PRAGMA table_info({table})").fetchall()
+    return any(row["name"] == column for row in rows)
+
 
 def init_db():
     with get_db() as conn:
@@ -40,7 +50,25 @@ def init_db():
                 key      TEXT PRIMARY KEY,
                 value    TEXT NOT NULL
             );
+
+            CREATE TABLE IF NOT EXISTS daily_limits (
+                mac      TEXT PRIMARY KEY,
+                limit_gb REAL NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS daily_notified (
+                mac      TEXT PRIMARY KEY
+            );
         """)
+
+        # ---- Migration: add 'reason' column to the existing 'banned' table ----
+        # Distinguishes manual /blk bans from automatic daily-limit bans, so the
+        # midnight reset only lifts the ones it caused itself.
+        if not _column_exists(conn, "banned", "reason"):
+            conn.execute(
+                "ALTER TABLE banned ADD COLUMN reason TEXT NOT NULL DEFAULT 'manual'"
+            )
+            logger.info("Migrated 'banned' table: added 'reason' column.")
 
         for mac, hostname, allowed in SEED_DEVICES:
             conn.execute(
@@ -54,8 +82,13 @@ def init_db():
         conn.execute(
             "INSERT OR IGNORE INTO settings (key, value) VALUES ('lockdown_state', '0')"
         )
+        conn.execute(
+            "INSERT OR IGNORE INTO settings (key, value) VALUES ('daily_default_limit', ?)",
+            (str(DEFAULT_DAILY_LIMIT_GB),)
+        )
 
     logger.info("Database initialized successfully.")
+
 
 # ========= DEVICES =========
 def get_devices() -> dict:
@@ -101,14 +134,31 @@ def get_banned() -> set:
         rows = conn.execute("SELECT mac FROM banned").fetchall()
     return {row["mac"] for row in rows}
 
-def ban_device(mac: str) -> bool:
+def get_banned_by_reason(reason: str) -> set:
+    # e.g. reason='daily_limit' -> only macs auto-banned for exceeding their daily cap,
+    # so the midnight reset never touches a manual /blk ban.
+    with get_db() as conn:
+        rows = conn.execute(
+            "SELECT mac FROM banned WHERE reason = ?", (reason,)
+        ).fetchall()
+    return {row["mac"] for row in rows}
+
+def get_ban_reason(mac: str) -> str | None:
+    mac = mac.upper()
+    with get_db() as conn:
+        row = conn.execute(
+            "SELECT reason FROM banned WHERE mac = ?", (mac,)
+        ).fetchone()
+    return row["reason"] if row else None
+
+def ban_device(mac: str, reason: str = "manual") -> bool:
     mac = mac.upper()
     hostname = get_hostname(mac)
     try:
         with get_db() as conn:
             conn.execute(
-                "INSERT OR IGNORE INTO banned (mac, hostname) VALUES (?, ?)",
-                (mac, hostname)
+                "INSERT OR IGNORE INTO banned (mac, hostname, reason) VALUES (?, ?, ?)",
+                (mac, hostname, reason)
             )
             inserted = conn.execute("SELECT changes() as c").fetchone()["c"]
         return bool(inserted)
@@ -171,3 +221,88 @@ def set_lockdown_state(state: bool):
         logger.info(f"Lockdown state updated to {state}")
     except Exception as e:
         logger.error(f"Error saving lockdown state: {e}")
+
+# ========= DAILY USAGE LIMITS =========
+def get_daily_default_limit() -> float:
+    try:
+        with get_db() as conn:
+            row = conn.execute(
+                "SELECT value FROM settings WHERE key = 'daily_default_limit'"
+            ).fetchone()
+        return float(row["value"]) if row else DEFAULT_DAILY_LIMIT_GB
+    except Exception as e:
+        logger.error(f"Error loading daily default limit: {e}")
+        return DEFAULT_DAILY_LIMIT_GB
+
+def set_daily_default_limit(value: float):
+    try:
+        with get_db() as conn:
+            conn.execute(
+                "INSERT OR REPLACE INTO settings (key, value) VALUES ('daily_default_limit', ?)",
+                (str(value),)
+            )
+        logger.info(f"Daily default limit updated to {value} GB")
+    except Exception as e:
+        logger.error(f"Error saving daily default limit: {e}")
+
+def get_device_daily_limit(mac: str) -> float | None:
+    # Returns the custom per-device limit, or None if the device uses the default.
+    mac = mac.upper()
+    try:
+        with get_db() as conn:
+            row = conn.execute(
+                "SELECT limit_gb FROM daily_limits WHERE mac = ?", (mac,)
+            ).fetchone()
+        return float(row["limit_gb"]) if row else None
+    except Exception as e:
+        logger.error(f"Error loading daily limit for {mac}: {e}")
+        return None
+
+def set_device_daily_limit(mac: str, value: float):
+    mac = mac.upper()
+    try:
+        with get_db() as conn:
+            conn.execute(
+                "INSERT OR REPLACE INTO daily_limits (mac, limit_gb) VALUES (?, ?)",
+                (mac, value)
+            )
+        logger.info(f"Daily limit for {mac} set to {value} GB")
+    except Exception as e:
+        logger.error(f"Error saving daily limit for {mac}: {e}")
+
+def get_all_device_daily_limits() -> dict:
+    # mac -> custom limit_gb (only devices with an override)
+    with get_db() as conn:
+        rows = conn.execute("SELECT mac, limit_gb FROM daily_limits").fetchall()
+    return {row["mac"]: float(row["limit_gb"]) for row in rows}
+
+def get_effective_daily_limit(mac: str) -> float:
+    custom = get_device_daily_limit(mac)
+    return custom if custom is not None else get_daily_default_limit()
+
+# ========= DAILY NOTIFICATION TRACKING (whitelist over-limit alerts) =========
+def was_notified_today(mac: str) -> bool:
+    mac = mac.upper()
+    with get_db() as conn:
+        row = conn.execute(
+            "SELECT 1 FROM daily_notified WHERE mac = ?", (mac,)
+        ).fetchone()
+    return row is not None
+
+def mark_notified_today(mac: str):
+    mac = mac.upper()
+    try:
+        with get_db() as conn:
+            conn.execute(
+                "INSERT OR IGNORE INTO daily_notified (mac) VALUES (?)", (mac,)
+            )
+    except Exception as e:
+        logger.error(f"Error marking {mac} as notified today: {e}")
+
+def clear_daily_notifications():
+    try:
+        with get_db() as conn:
+            conn.execute("DELETE FROM daily_notified")
+        logger.info("Daily notification flags cleared.")
+    except Exception as e:
+        logger.error(f"Error clearing daily notifications: {e}")
