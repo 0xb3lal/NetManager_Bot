@@ -36,6 +36,7 @@ BANNED_MACS    = db.get_banned()
 MACS_LIST      = db.get_devices()
 ALLOWED_MACS   = db.get_allowed()
 LOCKDOWN_STATE = db.get_lockdown_state()
+IP_TO_MAC_CACHE = {}
 
 # ========= HELPERS =========
 
@@ -356,8 +357,11 @@ def get_today_combined(speed_history, daily_history):
 def _get_today_usage_by_mac():
     speed_history = get_speed_history()
     daily_history = get_daily_history()
+    # Use the accumulative cache so a device that went to sleep
+    # after heavy usage is still counted toward its daily limit.
+    # _fetch_devlist() also updates the cache with current leases.
     dhcp_leases, _, _ = _fetch_devlist()
-    ip_to_mac = {lease[1]: lease[2].upper() for lease in dhcp_leases}
+    ip_to_mac = dict(IP_TO_MAC_CACHE)
     combined_usage = get_today_combined(speed_history, daily_history)
 
     usage_by_mac = {}
@@ -365,7 +369,7 @@ def _get_today_usage_by_mac():
         mac = ip_to_mac.get(ip)
         if not mac:
             continue
-        usage_by_mac[mac] = bytes_to_mb(total_bytes) / 1024
+        usage_by_mac[mac] = usage_by_mac.get(mac, 0) + bytes_to_mb(total_bytes) / 1024
     return usage_by_mac
 
 def _fetch_devlist():
@@ -379,6 +383,23 @@ def _fetch_devlist():
     dhcp_leases   = demjson3.decode(re.search(r"dhcpd_lease\s*=\s*(\[.*?\]);", r.text).group(1))
     wireless_devs = demjson3.decode(re.search(r"wldev\s*=\s*(\[.*?\]);", r.text).group(1))
     arp_list      = demjson3.decode(re.search(r"arplist\s*=\s*(\[.*?\]);", r.text).group(1))
+    # --- IP→MAC cache update (accumulative, survives device sleep) ---
+    global IP_TO_MAC_CACHE
+    for lease in dhcp_leases:
+        ip = lease[1]
+        mac = lease[2].upper()
+        if not ip or not mac:
+            continue
+        old_mac = IP_TO_MAC_CACHE.get(ip)
+        if old_mac and old_mac != mac:
+            old_name = MACS_LIST.get(old_mac, old_mac)
+            new_name = MACS_LIST.get(mac, mac)
+            logger.warning(
+                f"⚠️ IP Reuse: {ip} moved from {old_name} ({old_mac}) "
+                f"to {new_name} ({mac}) — daily usage may be inaccurate."
+            )
+        IP_TO_MAC_CACHE[ip] = mac
+    # -------------------------------------------------------------------
     return dhcp_leases, wireless_devs, arp_list
 
 def _fetch_devlist_and_discover(bot_instance):
@@ -907,6 +928,7 @@ class MyBot(discord.Client):
         ALLOWED_MACS   = db.get_allowed()
         THRESHOLD      = db.get_threshold()
         LOCKDOWN_STATE = db.get_lockdown_state()
+        IP_TO_MAC_CACHE = {}
         logger.info(f"Reapplying firewall rules on startup (lockdown_state={LOCKDOWN_STATE})...")
         async with ROUTER_LOCK:
             await asyncio.to_thread(_reapply_firewall_state)
@@ -1652,15 +1674,17 @@ async def before_device_discovery():
     await bot.wait_until_ready()
     logger.info("Device discovery task started (checks for new devices every 5 minutes).")
 
-@tasks.loop(minutes=15.0)
+@tasks.loop(minutes=10.0)
 async def daily_usage_monitor_task():
-    if ROUTER_LOCK.locked():
-        logger.debug("Daily usage monitor skipped (router busy with another task).")
+    logger.info("Daily usage monitor task TRIGGERED — waiting for router lock...")
+    try:
+        await asyncio.wait_for(ROUTER_LOCK.acquire(), timeout=60.0)
+    except asyncio.TimeoutError:
+        logger.warning("Daily usage monitor timed out waiting for router lock (>60s). Skipping.")
         return
     logger.info("Starting scheduled daily usage monitor check...")
     try:
-        async with ROUTER_LOCK:
-            usage_by_mac = await asyncio.to_thread(_get_today_usage_by_mac)
+        usage_by_mac = await asyncio.to_thread(_get_today_usage_by_mac)
 
         router  = requests.Session()
         router.auth = ROUTER_AUTH
@@ -1679,11 +1703,11 @@ async def daily_usage_monitor_task():
                     db.mark_notified_today(mac)
                     if channel:
                         status_box = (
-                            f"```\n"
+                            "```\n"
                             f"{'Device:'.ljust(10)} {device_name}\n"
                             f"{'Usage:'.ljust(10)} {usage_gb:.2f} GB\n"
                             f"{'Limit:'.ljust(10)} {effective_limit:.2f} GB\n"
-                            f"```"
+                            "```"
                         )
                         embed = discord.Embed(
                             title="`⚠️` Whitelisted Device Over Daily Limit",
@@ -1697,8 +1721,7 @@ async def daily_usage_monitor_task():
             if mac in BANNED_MACS:
                 continue
 
-            async with ROUTER_LOCK:
-                await asyncio.to_thread(ban_mac, router, headers, mac, "daily_limit")
+            await asyncio.to_thread(ban_mac, router, headers, mac, "daily_limit")
 
             logger.info(f"Auto-blocked {mac} for exceeding daily usage limit ({usage_gb:.2f}GB / {effective_limit:.2f}GB).")
 
@@ -1720,10 +1743,16 @@ async def daily_usage_monitor_task():
         logger.info("Scheduled daily usage monitor check completed.")
     except Exception as e:
         logger.error(f"Error in daily_usage_monitor_task: {e}")
+    finally:
+        if ROUTER_LOCK.locked():
+            ROUTER_LOCK.release()
+            logger.debug("Router lock released by daily_usage_monitor_task.")
 
 @daily_usage_monitor_task.before_loop
 async def before_daily_usage_monitor():
     await bot.wait_until_ready()
+    logger.info("Daily usage monitor task ready. Waiting 30s to avoid startup collision...")
+    await asyncio.sleep(30)
     logger.info("Daily usage monitor task started (checks per-device usage every 15 minutes).")
 
 MIDNIGHT_RESET_TIME = time(hour=0, minute=0, tzinfo=ZoneInfo("Africa/Cairo"))
@@ -1753,6 +1782,10 @@ async def midnight_reset_task():
                     unbanned_count += 1
 
         db.clear_daily_notifications()
+
+        global IP_TO_MAC_CACHE
+        IP_TO_MAC_CACHE.clear()
+        logger.info("IP→MAC cache cleared for the new day.")
 
         channel = bot.get_channel(CHANNEL_ID)
         if channel:
