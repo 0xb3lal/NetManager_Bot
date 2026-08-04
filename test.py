@@ -266,6 +266,13 @@ urllib3.disable_warnings()
 def bytes_to_mb(value):
     return value / (1024 * 1024)
 
+def format_data_size(value_gb):
+    """Display a GB value the friendly way: MB below 1GB, GB otherwise.
+    Avoids ugly numbers like '0.49 GB' when the user set a limit in MB."""
+    if value_gb >= 1:
+        return f"{value_gb:.2f} GB"
+    return f"{round(value_gb * 1024)} MB"
+
 def _decode_date(n):
     year  = ((n >> 16) & 0xFF) + 1900
     month = (n >> 8) & 0xFF
@@ -995,8 +1002,8 @@ async def _recheck_device_after_limit_change(mac):
         status_box = (
             f"```\n"
             f"{'Device:'.ljust(10)} {device_name}\n"
-            f"{'Usage:'.ljust(10)} {usage_gb:.2f} GB\n"
-            f"{'New Limit:'.ljust(10)} {effective_limit:.2f} GB\n"
+            f"{'Usage:'.ljust(10)} {format_data_size(usage_gb)}\n"
+            f"{'New Limit:'.ljust(10)} {format_data_size(effective_limit)}\n"
             f"```"
         )
         embed = discord.Embed(
@@ -1035,8 +1042,8 @@ async def _recheck_default_limit_devices():
             status_box = (
                 f"```\n"
                 f"{'Device:'.ljust(10)} {device_name}\n"
-                f"{'Usage:'.ljust(10)} {usage_gb:.2f} GB\n"
-                f"{'New Limit:'.ljust(10)} {default_limit:.2f} GB\n"
+                f"{'Usage:'.ljust(10)} {format_data_size(usage_gb)}\n"
+                f"{'New Limit:'.ljust(10)} {format_data_size(default_limit)}\n"
                 f"```"
             )
             embed = discord.Embed(
@@ -1377,7 +1384,7 @@ async def netstat(interaction: discord.Interaction, view: app_commands.Choice[st
                 lines = []
                 for dev in combined_data[:15]:
                     icon = "🔴" if dev["over"] else "🟢"
-                    lines.append(f"{icon} `{dev['name'][:12].ljust(12)} | 📊{dev['usage_gb']:.2f}/{dev['limit_gb']:.2f}GB`")
+                    lines.append(f"{icon} `{dev['name'][:12].ljust(12)} | 📊{format_data_size(dev['usage_gb'])}/{format_data_size(dev['limit_gb'])}`")
                 embed = discord.Embed(
                     title=f"`📡` Daily Limit Status ({len(combined_data)} Devices)",
                     description="\n".join(lines),
@@ -1464,14 +1471,14 @@ async def set_limit(
             overrides     = db.get_all_device_daily_limits()
             lines = [
                 f"{'Main Threshold:'.ljust(18)} {THRESHOLD} GB",
-                f"{'Daily Default:'.ljust(18)} {default_limit} GB",
+                f"{'Daily Default:'.ljust(18)} {format_data_size(default_limit)}",
             ]
             if overrides:
                 lines.append("")
                 lines.append("Custom Daily Limits:")
                 for m, gb in overrides.items():
                     device_name = MACS_LIST.get(m, m)
-                    lines.append(f"  {device_name[:14].ljust(14)} : {gb} GB")
+                    lines.append(f"  {device_name[:14].ljust(14)} : {format_data_size(gb)}")
             status_box = "```\n" + "\n".join(lines) + "\n```"
             embed = discord.Embed(title="`⚙️` Current Limit Configuration", description=status_box, color=0xf1c40f)
             await interaction.followup.send(embed=embed)
@@ -1492,9 +1499,9 @@ async def set_limit(
             status_box = (
                 f"```\n"
                 f"{'Device:'.ljust(10)} {device_name}\n"
-                f"{'New Limit:'.ljust(10)} {value_gb:.2f} GB\n"
+                f"{'New Limit:'.ljust(10)} {format_data_size(value_gb)}\n"
                 f"```\n"
-                f"`✅` *Settings updated.*"
+                f"`✅` *Settings updated. Resets to the daily default automatically at midnight.*"
             )
             embed = discord.Embed(title="`⚙️` Daily Limit Update", description=status_box, color=0xf1c40f)
             await interaction.followup.send(embed=embed)
@@ -1511,8 +1518,8 @@ async def set_limit(
             label_new = "New Default:".ljust(14)
             status_box = (
                 f"```\n"
-                f"{label_old} {old_limit} GB\n"
-                f"{label_new} {value_gb} GB\n"
+                f"{label_old} {format_data_size(old_limit)}\n"
+                f"{label_new} {format_data_size(value_gb)}\n"
                 f"```\n"
                 f"`✅` *Settings updated.*"
             )
@@ -1705,8 +1712,8 @@ async def daily_usage_monitor_task():
                         status_box = (
                             "```\n"
                             f"{'Device:'.ljust(10)} {device_name}\n"
-                            f"{'Usage:'.ljust(10)} {usage_gb:.2f} GB\n"
-                            f"{'Limit:'.ljust(10)} {effective_limit:.2f} GB\n"
+                            f"{'Usage:'.ljust(10)} {format_data_size(usage_gb)}\n"
+                            f"{'Limit:'.ljust(10)} {format_data_size(effective_limit)}\n"
                             "```"
                         )
                         embed = discord.Embed(
@@ -1729,8 +1736,8 @@ async def daily_usage_monitor_task():
                 status_box = (
                     f"```\n"
                     f"{'Device:'.ljust(10)} {device_name}\n"
-                    f"{'Usage:'.ljust(10)} {usage_gb:.2f} GB\n"
-                    f"{'Limit:'.ljust(10)} {effective_limit:.2f} GB\n"
+                    f"{'Usage:'.ljust(10)} {format_data_size(usage_gb)}\n"
+                    f"{'Limit:'.ljust(10)} {format_data_size(effective_limit)}\n"
                     f"```"
                 )
                 embed = discord.Embed(
@@ -1755,62 +1762,132 @@ async def before_daily_usage_monitor():
     await asyncio.sleep(30)
     logger.info("Daily usage monitor task started (checks per-device usage every 15 minutes).")
 
-MIDNIGHT_RESET_TIME = time(hour=0, minute=0, tzinfo=ZoneInfo("Africa/Cairo"))
+MIDNIGHT_RESET_TIME     = time(hour=0, minute=0, tzinfo=ZoneInfo("Africa/Cairo"))
+MIDNIGHT_RETRY_INTERVAL = 600   # retry every 10 minutes after a failed attempt
+MIDNIGHT_MAX_RETRIES    = 40    # safety cap (~6.5 hours) so retries don't run forever
+_midnight_retry_running = False
+
+async def _run_midnight_reset_steps():
+    """Runs every step of the midnight reset once and returns the results.
+    Shared by the scheduled run and the retry loop so both behave identically."""
+    async with ROUTER_LOCK:
+        ip_ok = await asyncio.to_thread(_reset_ip_traffic_stats)
+    await asyncio.sleep(5)
+
+    async with ROUTER_LOCK:
+        bw_ok = await asyncio.to_thread(_reset_bandwidth_stats)
+    await asyncio.sleep(5)
+
+    router  = requests.Session()
+    router.auth = ROUTER_AUTH
+    headers = {"Content-Type": "text/plain;charset=UTF-8", "Referer": ROUTER_URL + "/", "Origin": ROUTER_URL}
+
+    daily_banned   = db.get_banned_by_reason("daily_limit")
+    unbanned_count = 0
+    if daily_banned:
+        async with ROUTER_LOCK:
+            for mac in list(daily_banned):
+                await asyncio.to_thread(unban_mac, router, headers, mac)
+                unbanned_count += 1
+
+    # Custom per-device daily limits are a one-day override; every device
+    # falls back to the daily default automatically each midnight.
+    cleared_overrides = await asyncio.to_thread(db.clear_all_device_daily_limits)
+    db.clear_daily_notifications()
+
+    global IP_TO_MAC_CACHE
+    IP_TO_MAC_CACHE.clear()
+
+    return ip_ok, bw_ok, unbanned_count, cleared_overrides
+
+def _midnight_status_box(ip_ok, bw_ok, unbanned_count, cleared_overrides):
+    return (
+        f"```\n"
+        f"{'IP Traffic Reset:'.ljust(20)} {'OK' if ip_ok else 'FAILED'}\n"
+        f"{'Bandwidth Reset:'.ljust(20)} {'OK' if bw_ok else 'FAILED'}\n"
+        f"{'Devices Unblocked:'.ljust(20)} {unbanned_count}\n"
+        f"{'Custom Limits Reset:'.ljust(20)} {cleared_overrides}\n"
+        f"```"
+    )
 
 @tasks.loop(time=MIDNIGHT_RESET_TIME)
 async def midnight_reset_task():
     logger.info("Starting scheduled midnight reset...")
     try:
-        router  = requests.Session()
-        router.auth = ROUTER_AUTH
-        headers = {"Content-Type": "text/plain;charset=UTF-8", "Referer": ROUTER_URL + "/", "Origin": ROUTER_URL}
-
-        async with ROUTER_LOCK:
-            ip_ok = await asyncio.to_thread(_reset_ip_traffic_stats)
-        await asyncio.sleep(5)
-
-        async with ROUTER_LOCK:
-            bw_ok = await asyncio.to_thread(_reset_bandwidth_stats)
-        await asyncio.sleep(5)
-
-        daily_banned   = db.get_banned_by_reason("daily_limit")
-        unbanned_count = 0
-        if daily_banned:
-            async with ROUTER_LOCK:
-                for mac in list(daily_banned):
-                    await asyncio.to_thread(unban_mac, router, headers, mac)
-                    unbanned_count += 1
-
-        db.clear_daily_notifications()
-
-        global IP_TO_MAC_CACHE
-        IP_TO_MAC_CACHE.clear()
-        logger.info("IP→MAC cache cleared for the new day.")
+        ip_ok, bw_ok, unbanned_count, cleared_overrides = await _run_midnight_reset_steps()
 
         channel = bot.get_channel(CHANNEL_ID)
         if channel:
-            status_box = (
-                f"```\n"
-                f"{'IP Traffic Reset:'.ljust(20)} {'OK' if ip_ok else 'FAILED'}\n"
-                f"{'Bandwidth Reset:'.ljust(20)} {'OK' if bw_ok else 'FAILED'}\n"
-                f"{'Devices Unblocked:'.ljust(20)} {unbanned_count}\n"
-                f"```"
-            )
             embed = discord.Embed(
-                title="`🌙` Midnight Reset Completed",
-                description=status_box,
+                title="`🌙` Midnight Reset Completed" if (ip_ok and bw_ok) else "`⚠️` Midnight Reset Partially Failed",
+                description=_midnight_status_box(ip_ok, bw_ok, unbanned_count, cleared_overrides),
                 color=0x2ecc71 if (ip_ok and bw_ok) else 0xe67e22
             )
+            if not (ip_ok and bw_ok):
+                embed.set_footer(text="Retrying every 10 minutes until it succeeds...")
             await channel.send(embed=embed)
 
-        logger.info(f"Midnight reset completed. ip_ok={ip_ok} bw_ok={bw_ok} unbanned={unbanned_count}")
+        logger.info(
+            f"Midnight reset completed. ip_ok={ip_ok} bw_ok={bw_ok} "
+            f"unbanned={unbanned_count} cleared_overrides={cleared_overrides}"
+        )
+
+        if not (ip_ok and bw_ok):
+            global _midnight_retry_running
+            if not _midnight_retry_running:
+                _midnight_retry_running = True
+                asyncio.create_task(_retry_midnight_reset(channel))
+            else:
+                logger.warning("Midnight retry loop already running, skipping duplicate trigger.")
     except Exception as e:
         logger.error(f"Error in midnight_reset_task: {e}")
+
+async def _retry_midnight_reset(channel):
+    """Keeps retrying the midnight reset every 10 minutes (e.g. router was
+    offline at 00:00) until it succeeds or the retry cap is reached."""
+    global _midnight_retry_running
+    attempt = 1
+    try:
+        while attempt <= MIDNIGHT_MAX_RETRIES:
+            await asyncio.sleep(MIDNIGHT_RETRY_INTERVAL)
+            attempt += 1
+            logger.info(f"Retrying midnight reset (attempt {attempt})...")
+
+            try:
+                ip_ok, bw_ok, unbanned_count, cleared_overrides = await _run_midnight_reset_steps()
+            except Exception as e:
+                logger.error(f"Error during midnight reset retry attempt {attempt}: {e}")
+                continue
+
+            if ip_ok and bw_ok:
+                if channel:
+                    embed = discord.Embed(
+                        title="`✅` Midnight Reset Recovered",
+                        description=_midnight_status_box(ip_ok, bw_ok, unbanned_count, cleared_overrides),
+                        color=0x2ecc71
+                    )
+                    embed.set_footer(text=f"Succeeded on retry attempt {attempt}.")
+                    await channel.send(embed=embed)
+                logger.info(f"Midnight reset succeeded on retry attempt {attempt}.")
+                return
+
+            logger.warning(f"Midnight reset retry attempt {attempt} still failing (ip_ok={ip_ok}, bw_ok={bw_ok}).")
+
+        logger.error("Midnight reset retries exhausted without success.")
+        if channel:
+            embed = discord.Embed(
+                title="`❌` Midnight Reset Still Failing",
+                description=f"Gave up after {MIDNIGHT_MAX_RETRIES} retries. Please check the router manually.",
+                color=0xe74c3c
+            )
+            await channel.send(embed=embed)
+    finally:
+        _midnight_retry_running = False
 
 @midnight_reset_task.before_loop
 async def before_midnight_reset():
     await bot.wait_until_ready()
-    logger.info("Midnight reset task started (resets router traffic stats and daily-limit bans at 00:00 Cairo time).")
+    logger.info("Midnight reset task started (resets router traffic stats, daily-limit bans and custom limits at 00:00 Cairo time, with retry on failure).")
 
 # ========= MAIN =========
 async def main():

@@ -36,6 +36,7 @@ BANNED_MACS    = db.get_banned()
 MACS_LIST      = db.get_devices()
 ALLOWED_MACS   = db.get_allowed()
 LOCKDOWN_STATE = db.get_lockdown_state()
+IP_TO_MAC_CACHE = {}
 
 # ========= HELPERS =========
 
@@ -46,8 +47,6 @@ def hex_hmac_md5(key, data):
     return _hmac.new(key.encode(), data.encode(), hashlib.md5).hexdigest()
 
 def parse_traffic_to_gb(traffic_str):
-    # Radius dashboard returns values with mixed units (e.g. "370.7 MB", "1.5 GB"),
-    # so the unit has to be normalized before comparing against THRESHOLD (in GB).
     parts = traffic_str.strip().split()
     value = float(parts[0])
     unit  = parts[1].upper() if len(parts) > 1 else "GB"
@@ -117,9 +116,6 @@ def run_cmd_output(router, headers, cmd, timeout=15):
 
 # ========= LOCKDOWN LOGIC =========
 def _kick_non_allowed_devices(router, headers):
-    # Devices already connected before the whitelist rule is applied keep an existing
-    # session on the router; iptables only stops new traffic, so anything already
-    # associated needs to be deauthenticated to force a reconnect against the new rules.
     output = run_cmd_output(router, headers, f"wl -i {WIFI_IFACE} assoclist")
     if not output:
         return
@@ -158,12 +154,12 @@ def enable_lockdown(router, headers, force_lock=False):
     if force_lock:
         _kick_non_allowed_devices(router, headers)
 
-def ban_mac(router, headers, mac):
+def ban_mac(router, headers, mac, reason="manual"):
     mac = mac.upper()
     if mac not in BANNED_MACS:
         BANNED_MACS.add(mac)
-        db.ban_device(mac)
-        logger.info(f"Internal: Added {mac} to banned set.")
+        db.ban_device(mac, reason=reason)
+        logger.info(f"Internal: Added {mac} to banned set (reason={reason}).")
         enable_lockdown(router, headers, force_lock=LOCKDOWN_STATE)
     else:
         logger.warning(f"Internal: {mac} is already in banned set, skipping rewrite.")
@@ -358,6 +354,24 @@ def get_today_combined(speed_history, daily_history):
 
     return result
 
+def _get_today_usage_by_mac():
+    speed_history = get_speed_history()
+    daily_history = get_daily_history()
+    # Use the accumulative cache so a device that went to sleep
+    # after heavy usage is still counted toward its daily limit.
+    # _fetch_devlist() also updates the cache with current leases.
+    dhcp_leases, _, _ = _fetch_devlist()
+    ip_to_mac = dict(IP_TO_MAC_CACHE)
+    combined_usage = get_today_combined(speed_history, daily_history)
+
+    usage_by_mac = {}
+    for ip, total_bytes in combined_usage.items():
+        mac = ip_to_mac.get(ip)
+        if not mac:
+            continue
+        usage_by_mac[mac] = usage_by_mac.get(mac, 0) + bytes_to_mb(total_bytes) / 1024
+    return usage_by_mac
+
 def _fetch_devlist():
     router = requests.Session()
     router.auth   = ROUTER_AUTH
@@ -369,6 +383,23 @@ def _fetch_devlist():
     dhcp_leases   = demjson3.decode(re.search(r"dhcpd_lease\s*=\s*(\[.*?\]);", r.text).group(1))
     wireless_devs = demjson3.decode(re.search(r"wldev\s*=\s*(\[.*?\]);", r.text).group(1))
     arp_list      = demjson3.decode(re.search(r"arplist\s*=\s*(\[.*?\]);", r.text).group(1))
+    # --- IP→MAC cache update (accumulative, survives device sleep) ---
+    global IP_TO_MAC_CACHE
+    for lease in dhcp_leases:
+        ip = lease[1]
+        mac = lease[2].upper()
+        if not ip or not mac:
+            continue
+        old_mac = IP_TO_MAC_CACHE.get(ip)
+        if old_mac and old_mac != mac:
+            old_name = MACS_LIST.get(old_mac, old_mac)
+            new_name = MACS_LIST.get(mac, mac)
+            logger.warning(
+                f"⚠️ IP Reuse: {ip} moved from {old_name} ({old_mac}) "
+                f"to {new_name} ({mac}) — daily usage may be inaccurate."
+            )
+        IP_TO_MAC_CACHE[ip] = mac
+    # -------------------------------------------------------------------
     return dhcp_leases, wireless_devs, arp_list
 
 def _fetch_devlist_and_discover(bot_instance):
@@ -394,6 +425,51 @@ def _fetch_devlist_and_discover(bot_instance):
                 await channel.send(embed=embed)
         bot_instance.loop.create_task(_notify())
     return dhcp_leases, wireless_devs, arp_list
+
+# ========= DAILY LIMIT ROUTER RESET =========
+def _reset_ip_traffic_stats():
+    router = requests.Session()
+    router.auth   = ROUTER_AUTH
+    router.verify = False
+    headers = {"Content-Type": "application/x-www-form-urlencoded", "Referer": ROUTER_URL + "/", "Origin": ROUTER_URL}
+    data = (
+        "_nextpage=%2F%23admin-iptraffic.asp&_service=cstatsnew-restart&cstats_enable=1"
+        "&cstats_path=%2Fjffs%2F&cstats_sshut=1&cstats_bak=0&cstats_all=1&f_cstats_enable=on"
+        "&f_loc=%2Fjffs%2F&f_user=%2Fjffs%2F&cstats_stime=1&f_sshut=on&f_new=on&cstats_offset=1"
+        "&cstats_exclude=&f_all=on&cstats_labels=0&_http_id=TIDe5b1505eeac7f67f"
+    )
+    try:
+        response = router.post(f"{ROUTER_URL}/tomato.cgi", headers=headers, data=data, timeout=30)
+        if response.status_code == 200:
+            logger.info("IP Traffic stats reset successfully.")
+            return True
+        logger.error(f"IP Traffic stats reset failed with status {response.status_code}")
+        return False
+    except Exception as e:
+        logger.error(f"Error resetting IP Traffic stats: {e}")
+        return False
+
+def _reset_bandwidth_stats():
+    router = requests.Session()
+    router.auth   = ROUTER_AUTH
+    router.verify = False
+    headers = {"Content-Type": "application/x-www-form-urlencoded", "Referer": ROUTER_URL + "/", "Origin": ROUTER_URL}
+    data = (
+        "_nextpage=%2F%23admin-bwm.asp&_service=rstatsnew-restart&rstats_enable=1"
+        "&rstats_path=%2Fjffs%2F&rstats_sshut=1&rstats_bak=0&f_rstats_enable=on"
+        "&f_loc=%2Fjffs%2F&f_user=%2Fjffs%2F&rstats_stime=1&f_sshut=on&f_new=on"
+        "&rstats_offset=1&rstats_exclude=&_http_id=TIDe5b1505eeac7f67f"
+    )
+    try:
+        response = router.post(f"{ROUTER_URL}/tomato.cgi", headers=headers, data=data, timeout=30)
+        if response.status_code == 200:
+            logger.info("Bandwidth stats reset successfully.")
+            return True
+        logger.error(f"Bandwidth stats reset failed with status {response.status_code}")
+        return False
+    except Exception as e:
+        logger.error(f"Error resetting Bandwidth stats: {e}")
+        return False
 
 # ========= STATUS OF SERVICES =========
 def _check_jffs2():
@@ -494,9 +570,6 @@ def _reboot_router():
         logger.error(f"Router responded with unexpected status {response.status_code} for reboot command.")
         return False
     except (ReadTimeout, ConnectionError) as e:
-        # The router cuts its network/HTTP stack mid-response once it actually executes
-        # the reboot, so a dropped connection here is the EXPECTED signal of success,
-        # not a failure. Do not retry: the device is already going down.
         logger.warning(f"Connection dropped while router was rebooting (expected): {e}")
         return True
     except Exception as e:
@@ -520,9 +593,8 @@ def _is_router_alive():
         return False
 
 async def _wait_for_router_and_notify(channel, user_mention):
-    # Give the router a moment to actually go down before polling it
     await asyncio.sleep(15)
-    max_wait = 300   # stop waiting after 5 minutes
+    max_wait = 300
     interval = 10
     waited   = 0
     logger.info("Started watching for router recovery after manual reboot.")
@@ -770,8 +842,6 @@ class RebootConfirmView(discord.ui.View):
 
         logger.warning(f"Router reboot CONFIRMED by {interaction.user}")
 
-        # Give Discord a few seconds to fully deliver/render the confirmation message
-        # before we trigger the actual (disruptive) reboot on the router.
         logger.info("Waiting 5 seconds before sending the actual reboot command...")
         await asyncio.sleep(5)
         logger.info("Done waiting. Sending the reboot command to the router now.")
@@ -783,9 +853,6 @@ class RebootConfirmView(discord.ui.View):
             logger.exception(f"Unexpected error while sending reboot command: {e}")
             success = False
 
-        # Tell the user the immediate outcome via a direct channel message (same
-        # reliable mechanism the recovery watcher uses), instead of relying on the
-        # interaction's webhook/follow-up token which can silently misbehave.
         try:
             if success:
                 logger.info("Sending 'reboot command sent successfully' message to channel.")
@@ -796,8 +863,6 @@ class RebootConfirmView(discord.ui.View):
         except Exception as e:
             logger.error(f"Failed to send reboot result message: {e}")
 
-        # Schedule the recovery watcher independently of the message above,
-        # so a Discord API hiccup never blocks the "router is back" notification.
         if success:
             try:
                 asyncio.create_task(_wait_for_router_and_notify(interaction.channel, interaction.user.mention))
@@ -844,6 +909,10 @@ class MyBot(discord.Client):
             discord_keepalive_task.start()
         if not device_discovery_task.is_running():
             device_discovery_task.start()
+        if not daily_usage_monitor_task.is_running():
+            daily_usage_monitor_task.start()
+        if not midnight_reset_task.is_running():
+            midnight_reset_task.start()
 
     async def on_disconnect(self):
         logger.warning("Bot disconnected from Discord Gateway. Waiting for automatic reconnect...")
@@ -859,6 +928,7 @@ class MyBot(discord.Client):
         ALLOWED_MACS   = db.get_allowed()
         THRESHOLD      = db.get_threshold()
         LOCKDOWN_STATE = db.get_lockdown_state()
+        IP_TO_MAC_CACHE = {}
         logger.info(f"Reapplying firewall rules on startup (lockdown_state={LOCKDOWN_STATE})...")
         async with ROUTER_LOCK:
             await asyncio.to_thread(_reapply_firewall_state)
@@ -891,6 +961,90 @@ async def banned_macs_autocomplete(interaction: discord.Interaction, current: st
         if current.lower() in mac.lower() or current.lower() in MACS_LIST.get(mac, "").lower()
     ]
     return choices[:25]
+
+async def all_macs_autocomplete(interaction: discord.Interaction, current: str):
+    choices = [
+        app_commands.Choice(name=hostname, value=mac)
+        for mac, hostname in MACS_LIST.items()
+        if current.lower() in hostname.lower() or current.lower() in mac.lower()
+    ]
+    return choices[:25]
+
+# ========= DAILY LIMIT RECHECK HELPERS =========
+async def _recheck_device_after_limit_change(mac):
+    if mac not in BANNED_MACS or db.get_ban_reason(mac) != "daily_limit":
+        return
+
+    async with ROUTER_LOCK:
+        usage_by_mac = await asyncio.to_thread(_get_today_usage_by_mac)
+
+    usage_gb        = usage_by_mac.get(mac, 0)
+    effective_limit = db.get_effective_daily_limit(mac)
+    if usage_gb >= effective_limit:
+        return
+
+    router  = requests.Session()
+    router.auth = ROUTER_AUTH
+    headers = {"Content-Type": "text/plain;charset=UTF-8", "Referer": ROUTER_URL + "/", "Origin": ROUTER_URL}
+    async with ROUTER_LOCK:
+        await asyncio.to_thread(unban_mac, router, headers, mac)
+
+    device_name = MACS_LIST.get(mac, mac)
+    channel = bot.get_channel(CHANNEL_ID)
+    if channel:
+        status_box = (
+            f"```\n"
+            f"{'Device:'.ljust(10)} {device_name}\n"
+            f"{'Usage:'.ljust(10)} {usage_gb:.2f} GB\n"
+            f"{'New Limit:'.ljust(10)} {effective_limit:.2f} GB\n"
+            f"```"
+        )
+        embed = discord.Embed(
+            title="`✅` Device Auto-Unblocked (Limit Increased)",
+            description=status_box,
+            color=0x2ecc71
+        )
+        await channel.send(embed=embed)
+
+async def _recheck_default_limit_devices():
+    daily_banned = db.get_banned_by_reason("daily_limit")
+    overrides    = db.get_all_device_daily_limits()
+    candidates   = [mac for mac in daily_banned if mac not in overrides]
+    if not candidates:
+        return
+
+    async with ROUTER_LOCK:
+        usage_by_mac = await asyncio.to_thread(_get_today_usage_by_mac)
+
+    router  = requests.Session()
+    router.auth = ROUTER_AUTH
+    headers = {"Content-Type": "text/plain;charset=UTF-8", "Referer": ROUTER_URL + "/", "Origin": ROUTER_URL}
+    default_limit = db.get_daily_default_limit()
+    channel = bot.get_channel(CHANNEL_ID)
+
+    for mac in candidates:
+        usage_gb = usage_by_mac.get(mac, 0)
+        if usage_gb >= default_limit:
+            continue
+
+        async with ROUTER_LOCK:
+            await asyncio.to_thread(unban_mac, router, headers, mac)
+
+        device_name = MACS_LIST.get(mac, mac)
+        if channel:
+            status_box = (
+                f"```\n"
+                f"{'Device:'.ljust(10)} {device_name}\n"
+                f"{'Usage:'.ljust(10)} {usage_gb:.2f} GB\n"
+                f"{'New Limit:'.ljust(10)} {default_limit:.2f} GB\n"
+                f"```"
+            )
+            embed = discord.Embed(
+                title="`✅` Device Auto-Unblocked (Limit Increased)",
+                description=status_box,
+                color=0x2ecc71
+            )
+            await channel.send(embed=embed)
 
 # ========= COMMANDS =========
 
@@ -1027,8 +1181,27 @@ async def list_banned(interaction: discord.Interaction):
     logger.info(f"User {interaction.user} requested the banned MACs list.")
     try:
         if BANNED_MACS:
-            lines        = [f"{i:02d}. {MACS_LIST.get(m, 'Unknown Device')}" for i, m in enumerate(BANNED_MACS, 1)]
-            banned_output = "```\n" + "\n".join(lines) + "```"
+            manual_lines = []
+            daily_lines  = []
+            for m in BANNED_MACS:
+                device_name = MACS_LIST.get(m, "Unknown Device")
+                reason = db.get_ban_reason(m)
+                if reason == "daily_limit":
+                    daily_lines.append(device_name)
+                else:
+                    manual_lines.append(device_name)
+
+            sections = []
+            if manual_lines:
+                sections.append("🔒 Manual:")
+                sections += [f"  {i:02d}. {name}" for i, name in enumerate(manual_lines, 1)]
+            if daily_lines:
+                if sections:
+                    sections.append("")
+                sections.append("⏱️ Daily Limit:")
+                sections += [f"  {i:02d}. {name}" for i, name in enumerate(daily_lines, 1)]
+
+            banned_output = "```\n" + "\n".join(sections) + "```"
             count        = len(BANNED_MACS)
             embed_color  = 0xe67e22
         else:
@@ -1160,11 +1333,17 @@ async def active(interaction: discord.Interaction):
             pass
 
 # --------- /netstat ---------
-@bot.tree.command(name="netstat", description="Show all recognized devices and their usage")
-async def netstat(interaction: discord.Interaction):
+@bot.tree.command(name="netstat", description="Show device network usage or daily limit status")
+@app_commands.describe(view="Choose between raw usage (default) or daily limit comparison")
+@app_commands.choices(view=[
+    app_commands.Choice(name="Usage", value="usage"),
+    app_commands.Choice(name="Daily Limit Status", value="daily_limit"),
+])
+async def netstat(interaction: discord.Interaction, view: app_commands.Choice[str] = None):
     if not await safe_defer(interaction, thinking=True):
         return
-    logger.info(f"Network usage status requested by {interaction.user}")
+    view_value = view.value if view else "usage"
+    logger.info(f"Network usage status requested by {interaction.user} (view={view_value})")
     try:
 
         async with ROUTER_LOCK:
@@ -1176,8 +1355,40 @@ async def netstat(interaction: discord.Interaction):
         async with ROUTER_LOCK:
             dhcp_leases, _, _ = await asyncio.to_thread(_fetch_devlist)
 
-        devices_info     = {lease[2].upper(): {"name": lease[0], "ip": lease[1]} for lease in dhcp_leases}
-        combined_usage   = get_today_combined(speed_history, daily_history)
+        devices_info   = {lease[2].upper(): {"name": lease[0], "ip": lease[1]} for lease in dhcp_leases}
+        combined_usage = get_today_combined(speed_history, daily_history)
+
+        if view_value == "daily_limit":
+            combined_data = []
+            for mac, info in devices_info.items():
+                total_bytes     = combined_usage.get(info["ip"], 0)
+                usage_gb        = bytes_to_mb(total_bytes) / 1024
+                effective_limit = db.get_effective_daily_limit(mac)
+                combined_data.append({
+                    "name":     MACS_LIST.get(mac, info["name"]),
+                    "usage_gb": usage_gb,
+                    "limit_gb": effective_limit,
+                    "over":     usage_gb >= effective_limit
+                })
+
+            combined_data.sort(key=lambda x: (x["usage_gb"] / x["limit_gb"]) if x["limit_gb"] else 0, reverse=True)
+
+            if combined_data:
+                lines = []
+                for dev in combined_data[:15]:
+                    icon = "🔴" if dev["over"] else "🟢"
+                    lines.append(f"{icon} `{dev['name'][:12].ljust(12)} | 📊{dev['usage_gb']:.2f}/{dev['limit_gb']:.2f}GB`")
+                embed = discord.Embed(
+                    title=f"`📡` Daily Limit Status ({len(combined_data)} Devices)",
+                    description="\n".join(lines),
+                    color=0x2ecc71
+                )
+            else:
+                embed = discord.Embed(description="✨ No devices found in history.", color=0x95a5a6)
+
+            await interaction.followup.send(embed=embed)
+            return
+
         combined_data    = []
         total_traffic_mb = 0.0
 
@@ -1217,17 +1428,104 @@ async def netstat(interaction: discord.Interaction):
             pass
 
 # --------- /limit ---------
-@bot.tree.command(name="limit", description="Change the traffic threshold (GB)")
-@app_commands.describe(limit="The new threshold value in GB (e.g. 5.0)")
-async def set_limit(interaction: discord.Interaction, limit: float):
+@bot.tree.command(name="limit", description="View or change the main balance threshold or daily per-device usage limits")
+@app_commands.describe(
+    scope="Which limit to change (defaults to the main balance threshold)",
+    value="The new limit value",
+    unit="Unit for the value (defaults to GB)",
+    mac="Set a custom daily limit for one specific device"
+)
+@app_commands.choices(scope=[
+    app_commands.Choice(name="Main Balance", value="main"),
+    app_commands.Choice(name="Daily Default", value="daily_default"),
+    app_commands.Choice(name="List", value="list"),
+])
+@app_commands.choices(unit=[
+    app_commands.Choice(name="GB", value="GB"),
+    app_commands.Choice(name="MB", value="MB"),
+])
+@app_commands.autocomplete(mac=all_macs_autocomplete)
+async def set_limit(
+    interaction: discord.Interaction,
+    scope: app_commands.Choice[str] = None,
+    value: float = None,
+    unit: app_commands.Choice[str] = None,
+    mac: str = None
+):
     global THRESHOLD
     if not await safe_defer(interaction, thinking=True):
         return
     try:
+        scope_value = scope.value if scope else "main"
+        unit_value  = unit.value if unit else "GB"
+
+        if scope_value == "list":
+            default_limit = db.get_daily_default_limit()
+            overrides     = db.get_all_device_daily_limits()
+            lines = [
+                f"{'Main Threshold:'.ljust(18)} {THRESHOLD} GB",
+                f"{'Daily Default:'.ljust(18)} {default_limit} GB",
+            ]
+            if overrides:
+                lines.append("")
+                lines.append("Custom Daily Limits:")
+                for m, gb in overrides.items():
+                    device_name = MACS_LIST.get(m, m)
+                    lines.append(f"  {device_name[:14].ljust(14)} : {gb} GB")
+            status_box = "```\n" + "\n".join(lines) + "\n```"
+            embed = discord.Embed(title="`⚙️` Current Limit Configuration", description=status_box, color=0xf1c40f)
+            await interaction.followup.send(embed=embed)
+            return
+
+        if value is None:
+            await interaction.followup.send("`⚠️` Please provide a value.")
+            return
+
+        value_gb = value / 1024 if unit_value == "MB" else value
+
+        if mac:
+            mac_upper = mac.upper()
+            db.set_device_daily_limit(mac_upper, value_gb)
+            device_name = MACS_LIST.get(mac_upper, mac_upper)
+            logger.info(f"User {interaction.user} set custom daily limit for {mac_upper} to {value_gb} GB")
+
+            status_box = (
+                f"```\n"
+                f"{'Device:'.ljust(10)} {device_name}\n"
+                f"{'New Limit:'.ljust(10)} {value_gb:.2f} GB\n"
+                f"```\n"
+                f"`✅` *Settings updated.*"
+            )
+            embed = discord.Embed(title="`⚙️` Daily Limit Update", description=status_box, color=0xf1c40f)
+            await interaction.followup.send(embed=embed)
+
+            await _recheck_device_after_limit_change(mac_upper)
+            return
+
+        if scope_value == "daily_default":
+            old_limit = db.get_daily_default_limit()
+            db.set_daily_default_limit(value_gb)
+            logger.info(f"User {interaction.user} updated daily default limit to {value_gb} GB")
+
+            label_old = "Old Default:".ljust(14)
+            label_new = "New Default:".ljust(14)
+            status_box = (
+                f"```\n"
+                f"{label_old} {old_limit} GB\n"
+                f"{label_new} {value_gb} GB\n"
+                f"```\n"
+                f"`✅` *Settings updated.*"
+            )
+            embed = discord.Embed(title="`⚙️` Daily Default Limit Update", description=status_box, color=0xf1c40f)
+            await interaction.followup.send(embed=embed)
+
+            await _recheck_default_limit_devices()
+            return
+
         old_limit = THRESHOLD
-        THRESHOLD = limit
-        db.set_threshold(limit)
-        logger.info(f"User {interaction.user} updated THRESHOLD to {limit}")
+        THRESHOLD = value_gb
+        db.set_threshold(value_gb)
+        logger.info(f"User {interaction.user} updated THRESHOLD to {value_gb}")
         label_old = "Old Limit:".ljust(14)
         label_new = "New Limit:".ljust(14)
         status_box = (
@@ -1375,6 +1673,144 @@ async def device_discovery_task():
 async def before_device_discovery():
     await bot.wait_until_ready()
     logger.info("Device discovery task started (checks for new devices every 5 minutes).")
+
+@tasks.loop(minutes=10.0)
+async def daily_usage_monitor_task():
+    logger.info("Daily usage monitor task TRIGGERED — waiting for router lock...")
+    try:
+        await asyncio.wait_for(ROUTER_LOCK.acquire(), timeout=60.0)
+    except asyncio.TimeoutError:
+        logger.warning("Daily usage monitor timed out waiting for router lock (>60s). Skipping.")
+        return
+    logger.info("Starting scheduled daily usage monitor check...")
+    try:
+        usage_by_mac = await asyncio.to_thread(_get_today_usage_by_mac)
+
+        router  = requests.Session()
+        router.auth = ROUTER_AUTH
+        headers = {"Content-Type": "text/plain;charset=UTF-8", "Referer": ROUTER_URL + "/", "Origin": ROUTER_URL}
+        channel = bot.get_channel(CHANNEL_ID)
+
+        for mac, usage_gb in usage_by_mac.items():
+            effective_limit = db.get_effective_daily_limit(mac)
+            if usage_gb < effective_limit:
+                continue
+
+            device_name = MACS_LIST.get(mac, mac)
+
+            if mac in ALLOWED_MACS:
+                if not db.was_notified_today(mac):
+                    db.mark_notified_today(mac)
+                    if channel:
+                        status_box = (
+                            "```\n"
+                            f"{'Device:'.ljust(10)} {device_name}\n"
+                            f"{'Usage:'.ljust(10)} {usage_gb:.2f} GB\n"
+                            f"{'Limit:'.ljust(10)} {effective_limit:.2f} GB\n"
+                            "```"
+                        )
+                        embed = discord.Embed(
+                            title="`⚠️` Whitelisted Device Over Daily Limit",
+                            description=status_box,
+                            color=0xe67e22
+                        )
+                        embed.set_footer(text="Whitelisted devices are never blocked automatically.")
+                        await channel.send(embed=embed)
+                continue
+
+            if mac in BANNED_MACS:
+                continue
+
+            await asyncio.to_thread(ban_mac, router, headers, mac, "daily_limit")
+
+            logger.info(f"Auto-blocked {mac} for exceeding daily usage limit ({usage_gb:.2f}GB / {effective_limit:.2f}GB).")
+
+            if channel:
+                status_box = (
+                    f"```\n"
+                    f"{'Device:'.ljust(10)} {device_name}\n"
+                    f"{'Usage:'.ljust(10)} {usage_gb:.2f} GB\n"
+                    f"{'Limit:'.ljust(10)} {effective_limit:.2f} GB\n"
+                    f"```"
+                )
+                embed = discord.Embed(
+                    title="`🚫` Device Auto-Blocked (Daily Limit)",
+                    description=status_box,
+                    color=0xff4747
+                )
+                await channel.send(embed=embed)
+
+        logger.info("Scheduled daily usage monitor check completed.")
+    except Exception as e:
+        logger.error(f"Error in daily_usage_monitor_task: {e}")
+    finally:
+        if ROUTER_LOCK.locked():
+            ROUTER_LOCK.release()
+            logger.debug("Router lock released by daily_usage_monitor_task.")
+
+@daily_usage_monitor_task.before_loop
+async def before_daily_usage_monitor():
+    await bot.wait_until_ready()
+    logger.info("Daily usage monitor task ready. Waiting 30s to avoid startup collision...")
+    await asyncio.sleep(30)
+    logger.info("Daily usage monitor task started (checks per-device usage every 15 minutes).")
+
+MIDNIGHT_RESET_TIME = time(hour=0, minute=0, tzinfo=ZoneInfo("Africa/Cairo"))
+
+@tasks.loop(time=MIDNIGHT_RESET_TIME)
+async def midnight_reset_task():
+    logger.info("Starting scheduled midnight reset...")
+    try:
+        router  = requests.Session()
+        router.auth = ROUTER_AUTH
+        headers = {"Content-Type": "text/plain;charset=UTF-8", "Referer": ROUTER_URL + "/", "Origin": ROUTER_URL}
+
+        async with ROUTER_LOCK:
+            ip_ok = await asyncio.to_thread(_reset_ip_traffic_stats)
+        await asyncio.sleep(5)
+
+        async with ROUTER_LOCK:
+            bw_ok = await asyncio.to_thread(_reset_bandwidth_stats)
+        await asyncio.sleep(5)
+
+        daily_banned   = db.get_banned_by_reason("daily_limit")
+        unbanned_count = 0
+        if daily_banned:
+            async with ROUTER_LOCK:
+                for mac in list(daily_banned):
+                    await asyncio.to_thread(unban_mac, router, headers, mac)
+                    unbanned_count += 1
+
+        db.clear_daily_notifications()
+
+        global IP_TO_MAC_CACHE
+        IP_TO_MAC_CACHE.clear()
+        logger.info("IP→MAC cache cleared for the new day.")
+
+        channel = bot.get_channel(CHANNEL_ID)
+        if channel:
+            status_box = (
+                f"```\n"
+                f"{'IP Traffic Reset:'.ljust(20)} {'OK' if ip_ok else 'FAILED'}\n"
+                f"{'Bandwidth Reset:'.ljust(20)} {'OK' if bw_ok else 'FAILED'}\n"
+                f"{'Devices Unblocked:'.ljust(20)} {unbanned_count}\n"
+                f"```"
+            )
+            embed = discord.Embed(
+                title="`🌙` Midnight Reset Completed",
+                description=status_box,
+                color=0x2ecc71 if (ip_ok and bw_ok) else 0xe67e22
+            )
+            await channel.send(embed=embed)
+
+        logger.info(f"Midnight reset completed. ip_ok={ip_ok} bw_ok={bw_ok} unbanned={unbanned_count}")
+    except Exception as e:
+        logger.error(f"Error in midnight_reset_task: {e}")
+
+@midnight_reset_task.before_loop
+async def before_midnight_reset():
+    await bot.wait_until_ready()
+    logger.info("Midnight reset task started (resets router traffic stats and daily-limit bans at 00:00 Cairo time).")
 
 # ========= MAIN =========
 async def main():

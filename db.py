@@ -280,6 +280,21 @@ def get_effective_daily_limit(mac: str) -> float:
     custom = get_device_daily_limit(mac)
     return custom if custom is not None else get_daily_default_limit()
 
+def clear_all_device_daily_limits() -> int:
+    # Wipes every custom per-device override so all devices fall back to the
+    # daily default. Used by the midnight reset (runs once per day).
+    # Returns how many overrides were removed.
+    try:
+        with get_db() as conn:
+            count = conn.execute("SELECT COUNT(*) as c FROM daily_limits").fetchone()["c"]
+            conn.execute("DELETE FROM daily_limits")
+        if count:
+            logger.info(f"Cleared {count} custom daily limit override(s) at midnight reset.")
+        return count
+    except Exception as e:
+        logger.error(f"Error clearing daily limit overrides: {e}")
+        return 0
+
 # ========= DAILY NOTIFICATION TRACKING (whitelist over-limit alerts) =========
 def was_notified_today(mac: str) -> bool:
     mac = mac.upper()
