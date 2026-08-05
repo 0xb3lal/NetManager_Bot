@@ -387,9 +387,18 @@ def _fetch_devlist():
     data    = "exec=devlist&_http_id=TIDe5b1505eeac7f67f"
     headers = {"Content-Type": "text/plain;charset=UTF-8", "Referer": ROUTER_URL + "/", "Origin": ROUTER_URL}
     r = router.post(url, headers=headers, data=data, timeout=30)
-    dhcp_leases   = demjson3.decode(re.search(r"dhcpd_lease\s*=\s*(\[.*?\]);", r.text).group(1))
-    wireless_devs = demjson3.decode(re.search(r"wldev\s*=\s*(\[.*?\]);", r.text).group(1))
-    arp_list      = demjson3.decode(re.search(r"arplist\s*=\s*(\[.*?\]);", r.text).group(1))
+
+    dhcp_match  = re.search(r"dhcpd_lease\s*=\s*(\[.*?\]);", r.text)
+    wldev_match = re.search(r"wldev\s*=\s*(\[.*?\]);", r.text)
+    arp_match   = re.search(r"arplist\s*=\s*(\[.*?\]);", r.text)
+
+    if not (dhcp_match and wldev_match and arp_match):
+        logger.error(f"Router devlist regex failed to match. Response snippet: {r.text[:500]!r}")
+        raise RuntimeError("Failed to parse router devlist response (malformed or empty).")
+
+    dhcp_leases   = demjson3.decode(dhcp_match.group(1))
+    wireless_devs = demjson3.decode(wldev_match.group(1))
+    arp_list      = demjson3.decode(arp_match.group(1))
     # --- IP→MAC cache update (accumulative, survives device sleep) ---
     global IP_TO_MAC_CACHE
     for lease in dhcp_leases:
@@ -928,7 +937,7 @@ class MyBot(discord.Client):
         logger.info("Discord Gateway session resumed successfully. Bot is fully operational.")
 
     async def on_ready(self):
-        global BANNED_MACS, MACS_LIST, ALLOWED_MACS, THRESHOLD, LOCKDOWN_STATE
+        global BANNED_MACS, MACS_LIST, ALLOWED_MACS, THRESHOLD, LOCKDOWN_STATE, IP_TO_MAC_CACHE
         logger.info(f"Bot ready: {self.user}")
         BANNED_MACS    = db.get_banned()
         MACS_LIST      = db.get_devices()
@@ -1683,13 +1692,14 @@ async def before_device_discovery():
 
 @tasks.loop(minutes=10.0)
 async def daily_usage_monitor_task():
-    logger.info("Daily usage monitor task TRIGGERED — waiting for router lock...")
-    try:
-        await asyncio.wait_for(ROUTER_LOCK.acquire(), timeout=60.0)
-    except asyncio.TimeoutError:
-        logger.warning("Daily usage monitor timed out waiting for router lock (>60s). Skipping.")
+    if ROUTER_LOCK.locked():
+        logger.debug("Daily usage monitor skipped (router busy with another task).")
         return
-    logger.info("Starting scheduled daily usage monitor check...")
+    logger.info("Daily usage monitor task TRIGGERED — starting scheduled check...")
+    async with ROUTER_LOCK:
+        await _run_daily_usage_monitor_check()
+
+async def _run_daily_usage_monitor_check():
     try:
         usage_by_mac = await asyncio.to_thread(_get_today_usage_by_mac)
 
@@ -1813,10 +1823,10 @@ def _midnight_status_box(ip_ok, bw_ok, unbanned_count, cleared_overrides):
 @tasks.loop(time=MIDNIGHT_RESET_TIME)
 async def midnight_reset_task():
     logger.info("Starting scheduled midnight reset...")
+    channel = bot.get_channel(CHANNEL_ID)
     try:
         ip_ok, bw_ok, unbanned_count, cleared_overrides = await _run_midnight_reset_steps()
 
-        channel = bot.get_channel(CHANNEL_ID)
         if channel:
             embed = discord.Embed(
                 title="`🌙` Midnight Reset Completed" if (ip_ok and bw_ok) else "`⚠️` Midnight Reset Partially Failed",
@@ -1840,7 +1850,25 @@ async def midnight_reset_task():
             else:
                 logger.warning("Midnight retry loop already running, skipping duplicate trigger.")
     except Exception as e:
-        logger.error(f"Error in midnight_reset_task: {e}")
+        logger.exception(f"Critical error in midnight_reset_task: {e}")
+        if channel:
+            embed = discord.Embed(
+                title="`💥` Midnight Reset Crashed",
+                description=f"```\n{str(e)[:500]}\n```",
+                color=0xe74c3c
+            )
+            embed.set_footer(text="Retrying every 10 minutes until it succeeds...")
+            try:
+                await channel.send(embed=embed)
+            except Exception as send_err:
+                logger.error(f"Failed to send midnight-reset crash notification: {send_err}")
+
+        global _midnight_retry_running
+        if not _midnight_retry_running:
+            _midnight_retry_running = True
+            asyncio.create_task(_retry_midnight_reset(channel))
+        else:
+            logger.warning("Midnight retry loop already running, skipping duplicate trigger.")
 
 async def _retry_midnight_reset(channel):
     """Keeps retrying the midnight reset every 10 minutes (e.g. router was
