@@ -955,6 +955,27 @@ async def all_macs_autocomplete(interaction: discord.Interaction, current: str):
     ]
     return choices[:25]
 
+async def wl_macs_autocomplete(interaction: discord.Interaction, current: str):
+    # Filters based on the "action" option already chosen (add/remove) so that:
+    # - "add" only shows devices NOT already whitelisted
+    # - "remove" only shows devices that ARE currently whitelisted
+    action_value = getattr(interaction.namespace, "action", None)
+
+    if action_value == "remove":
+        candidates = {mac: MACS_LIST.get(mac, "Unknown Device") for mac in ALLOWED_MACS}
+    elif action_value == "add":
+        candidates = {mac: hostname for mac, hostname in MACS_LIST.items() if mac not in ALLOWED_MACS}
+    else:
+        # Action not chosen yet, fall back to showing everything
+        candidates = MACS_LIST
+
+    choices = [
+        app_commands.Choice(name=hostname, value=mac)
+        for mac, hostname in candidates.items()
+        if current.lower() in hostname.lower() or current.lower() in mac.lower()
+    ]
+    return choices[:25]
+
 # ========= DAILY LIMIT RECHECK HELPERS =========
 async def _recheck_device_after_limit_change(mac):
     if mac not in BANNED_MACS or db.get_ban_reason(mac) != "daily_limit":
@@ -1038,7 +1059,7 @@ async def _recheck_default_limit_devices():
     app_commands.Choice(name="Add", value="add"),
     app_commands.Choice(name="Remove", value="remove"),
 ])
-@app_commands.autocomplete(mac=all_macs_autocomplete)
+@app_commands.autocomplete(mac=wl_macs_autocomplete)
 async def wl(
     interaction: discord.Interaction, 
     action: app_commands.Choice[str], 
