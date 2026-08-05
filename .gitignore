@@ -6,4 +6,3 @@ venv/
 netmanager.db
 __pycache__/
 test/
-test_v2_kimi.py.bak
