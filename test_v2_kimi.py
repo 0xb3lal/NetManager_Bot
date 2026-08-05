@@ -1819,6 +1819,7 @@ def _midnight_status_box(ip_ok, bw_ok, unbanned_count, cleared_overrides):
 
 @tasks.loop(time=MIDNIGHT_RESET_TIME)
 async def midnight_reset_task():
+    global _midnight_retry_running
     logger.info("Starting scheduled midnight reset...")
     channel = bot.get_channel(CHANNEL_ID)
     try:
@@ -1840,7 +1841,6 @@ async def midnight_reset_task():
         )
 
         if not (ip_ok and bw_ok):
-            global _midnight_retry_running
             if not _midnight_retry_running:
                 _midnight_retry_running = True
                 asyncio.create_task(_retry_midnight_reset(channel))
@@ -1860,7 +1860,6 @@ async def midnight_reset_task():
             except Exception as send_err:
                 logger.error(f"Failed to send midnight-reset crash notification: {send_err}")
 
-        global _midnight_retry_running
         if not _midnight_retry_running:
             _midnight_retry_running = True
             asyncio.create_task(_retry_midnight_reset(channel))
