@@ -1027,49 +1027,55 @@ async def _recheck_default_limit_devices():
 
 # ========= COMMANDS =========
 
-# --------- /wl (Whitelist Group) ---------
-wl_group = app_commands.Group(name="wl", description="Manage Allowed Devices (Whitelist)")
-
-@wl_group.command(name="add", description="Add a device to the whitelist")
+# --------- /wl (Whitelist Command) ---------
+@bot.tree.command(name="wl", description="Manage Allowed Devices (Whitelist)")
+@app_commands.describe(
+    action="Choose whether to add or remove a device",
+    mac="The MAC address of the device",
+    hostname="The hostname (only used when adding, optional)"
+)
+@app_commands.choices(action=[
+    app_commands.Choice(name="Add", value="add"),
+    app_commands.Choice(name="Remove", value="remove"),
+])
 @app_commands.autocomplete(mac=all_macs_autocomplete)
-async def wl_add(interaction: discord.Interaction, mac: str, hostname: str = "Unknown"):
+async def wl(
+    interaction: discord.Interaction, 
+    action: app_commands.Choice[str], 
+    mac: str, 
+    hostname: str = "Unknown"
+):
     if not await safe_defer(interaction, thinking=True):
         return
+    
     mac = mac.upper()
     if not is_valid_mac(mac):
         return await interaction.followup.send("`❌` Invalid MAC Address format.")
     
-    db.add_device(mac, hostname)
-    MACS_LIST[mac] = hostname
-    db.set_device_allowed(mac, True)
+    action_value = action.value
     
-    if mac not in ALLOWED_MACS:
-        ALLOWED_MACS.append(mac)
+    if action_value == "add":
+        db.add_device(mac, hostname)
+        MACS_LIST[mac] = hostname
+        db.set_device_allowed(mac, True)
         
-    async with ROUTER_LOCK:
-        await asyncio.to_thread(enable_lockdown, force_lock=LOCKDOWN_STATE)
-        
-    await interaction.followup.send(f"`✅` Device `{hostname}` ({mac}) added to whitelist.")
-
-@wl_group.command(name="remove", description="Remove a device from the whitelist")
-@app_commands.autocomplete(mac=all_macs_autocomplete)
-async def wl_remove(interaction: discord.Interaction, mac: str):
-    if not await safe_defer(interaction, thinking=True):
-        return
-    mac = mac.upper()
-    if not is_valid_mac(mac):
-        return await interaction.followup.send("`❌` Invalid MAC Address format.")
-
-    if mac in ALLOWED_MACS:
-        ALLOWED_MACS.remove(mac)
-        db.set_device_allowed(mac, False)
+        if mac not in ALLOWED_MACS:
+            ALLOWED_MACS.append(mac)
+            
         async with ROUTER_LOCK:
             await asyncio.to_thread(enable_lockdown, force_lock=LOCKDOWN_STATE)
-        await interaction.followup.send(f"`✅` Device ({mac}) removed from whitelist.")
-    else:
-        await interaction.followup.send("`⚠️` Device is not in the whitelist.")
-
-bot.tree.add_command(wl_group)
+            
+        await interaction.followup.send(f"`✅` Device `{hostname}` ({mac}) added to whitelist.")
+        
+    elif action_value == "remove":
+        if mac in ALLOWED_MACS:
+            ALLOWED_MACS.remove(mac)
+            db.set_device_allowed(mac, False)
+            async with ROUTER_LOCK:
+                await asyncio.to_thread(enable_lockdown, force_lock=LOCKDOWN_STATE)
+            await interaction.followup.send(f"`✅` Device ({mac}) removed from whitelist.")
+        else:
+            await interaction.followup.send("`⚠️` Device is not in the whitelist.")
 
 # --------- /blk ---------
 @bot.tree.command(name="blk", description="Ban a MAC address from the list")
