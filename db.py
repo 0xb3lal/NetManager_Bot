@@ -1,5 +1,6 @@
 import sqlite3
 import logging
+from contextlib import contextmanager
 
 logger = logging.getLogger(__name__)
 
@@ -20,11 +21,18 @@ SEED_DEVICES = [
 # Default daily-per-device usage cap (GB), used when a device has no custom override.
 DEFAULT_DAILY_LIMIT_GB = 1.5
 
-
+@contextmanager
 def get_db():
     conn = sqlite3.connect(DB_FILE)
     conn.row_factory = sqlite3.Row
-    return conn
+    try:
+        yield conn
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
 
 
 def _column_exists(conn, table: str, column: str) -> bool:
@@ -62,8 +70,6 @@ def init_db():
         """)
 
         # ---- Migration: add 'reason' column to the existing 'banned' table ----
-        # Distinguishes manual /blk bans from automatic daily-limit bans, so the
-        # midnight reset only lifts the ones it caused itself.
         if not _column_exists(conn, "banned", "reason"):
             conn.execute(
                 "ALTER TABLE banned ADD COLUMN reason TEXT NOT NULL DEFAULT 'manual'"
@@ -101,6 +107,20 @@ def get_allowed() -> list:
         rows = conn.execute("SELECT mac FROM devices WHERE allowed = 1").fetchall()
     return [row["mac"] for row in rows]
 
+def set_device_allowed(mac: str, allowed: bool) -> bool:
+    mac = mac.upper()
+    val = 1 if allowed else 0
+    try:
+        with get_db() as conn:
+            conn.execute(
+                "UPDATE devices SET allowed = ? WHERE mac = ?", (val, mac)
+            )
+            updated = conn.execute("SELECT changes() as c").fetchone()["c"]
+        return bool(updated)
+    except Exception as e:
+        logger.error(f"Error updating allowed state for {mac}: {e}")
+        return False
+
 def add_device(mac: str, hostname: str) -> bool:
     mac = mac.upper()
     hostname = hostname.strip() or "Unknown"
@@ -135,8 +155,6 @@ def get_banned() -> set:
     return {row["mac"] for row in rows}
 
 def get_banned_by_reason(reason: str) -> set:
-    # e.g. reason='daily_limit' -> only macs auto-banned for exceeding their daily cap,
-    # so the midnight reset never touches a manual /blk ban.
     with get_db() as conn:
         rows = conn.execute(
             "SELECT mac FROM banned WHERE reason = ?", (reason,)
@@ -246,7 +264,6 @@ def set_daily_default_limit(value: float):
         logger.error(f"Error saving daily default limit: {e}")
 
 def get_device_daily_limit(mac: str) -> float | None:
-    # Returns the custom per-device limit, or None if the device uses the default.
     mac = mac.upper()
     try:
         with get_db() as conn:
@@ -271,7 +288,6 @@ def set_device_daily_limit(mac: str, value: float):
         logger.error(f"Error saving daily limit for {mac}: {e}")
 
 def get_all_device_daily_limits() -> dict:
-    # mac -> custom limit_gb (only devices with an override)
     with get_db() as conn:
         rows = conn.execute("SELECT mac, limit_gb FROM daily_limits").fetchall()
     return {row["mac"]: float(row["limit_gb"]) for row in rows}
@@ -281,9 +297,6 @@ def get_effective_daily_limit(mac: str) -> float:
     return custom if custom is not None else get_daily_default_limit()
 
 def clear_all_device_daily_limits() -> int:
-    # Wipes every custom per-device override so all devices fall back to the
-    # daily default. Used by the midnight reset (runs once per day).
-    # Returns how many overrides were removed.
     try:
         with get_db() as conn:
             count = conn.execute("SELECT COUNT(*) as c FROM daily_limits").fetchone()["c"]
@@ -295,7 +308,7 @@ def clear_all_device_daily_limits() -> int:
         logger.error(f"Error clearing daily limit overrides: {e}")
         return 0
 
-# ========= DAILY NOTIFICATION TRACKING (whitelist over-limit alerts) =========
+# ========= DAILY NOTIFICATION TRACKING =========
 def was_notified_today(mac: str) -> bool:
     mac = mac.upper()
     with get_db() as conn:

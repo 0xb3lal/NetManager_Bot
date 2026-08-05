@@ -29,6 +29,22 @@ GUILD_ID     = discord.Object(id=1475047474832867338)
 CHANNEL_ID   = int(os.getenv("CHANNEL_ID")) if os.getenv("CHANNEL_ID") else 0
 WIFI_IFACE   = os.getenv("WIFI_IFACE", "eth1")
 
+# ========= GLOBAL SESSIONS =========
+# Reusing connections prevents TCP/TLS handshake overhead and massively speeds up commands.
+urllib3.disable_warnings()
+
+ROUTER_SESSION = requests.Session()
+ROUTER_SESSION.auth = ROUTER_AUTH
+ROUTER_SESSION.verify = False
+ROUTER_SESSION.headers.update({
+    "Content-Type": "text/plain;charset=UTF-8",
+    "Referer": f"{ROUTER_URL}/",
+    "Origin": ROUTER_URL,
+    "User-Agent": "Mozilla/5.0"
+})
+
+RADIUS_SESSION = requests.Session()
+
 # ========= DB CONFIG =========
 db.init_db()
 THRESHOLD      = db.get_threshold()
@@ -56,6 +72,10 @@ def parse_traffic_to_gb(traffic_str):
         return value / (1024 * 1024)
     return value
 
+def is_valid_mac(mac: str) -> bool:
+    # Strict regex validation to prevent Command Injection on the Router
+    return bool(re.fullmatch(r"^([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}$", mac, re.IGNORECASE))
+
 async def safe_defer(interaction: discord.Interaction, thinking: bool = False) -> bool:
     if interaction.response.is_done():
         return True
@@ -78,11 +98,11 @@ async def safe_defer(interaction: discord.Interaction, thinking: bool = False) -
         return False
 
 # ========= ROUTER EXEC =========
-def run_cmd(router, headers, cmd, _retry=True):
+def run_cmd(cmd, _retry=True):
     data = f"action=execute&command={cmd}\n&_http_id=TIDe5b1505eeac7f67f"
     try:
         logger.debug(f"Sending Command to Router: {cmd}")
-        response = router.post(f"{ROUTER_URL}/shell.cgi", headers=headers, data=data, timeout=30)
+        response = ROUTER_SESSION.post(f"{ROUTER_URL}/shell.cgi", data=data, timeout=30)
         if response.status_code == 200:
             logger.debug(f"Router executed: {cmd} successfully.")
             return True
@@ -93,16 +113,16 @@ def run_cmd(router, headers, cmd, _retry=True):
         logger.error(f"Router Connection Error while executing '{cmd}': {e}")
         if _retry:
             logger.warning(f"Retrying command once: {cmd}")
-            return run_cmd(router, headers, cmd, _retry=False)
+            return run_cmd(cmd, _retry=False)
         return False
     except Exception as e:
         logger.error(f"Unexpected error in run_cmd: {e}")
         return False
 
-def run_cmd_output(router, headers, cmd, timeout=15):
+def run_cmd_output(cmd, timeout=15):
     data = f"action=execute&command={cmd}\n&_http_id=TIDe5b1505eeac7f67f"
     try:
-        response = router.post(f"{ROUTER_URL}/shell.cgi", headers=headers, data=data, timeout=timeout)
+        response = ROUTER_SESSION.post(f"{ROUTER_URL}/shell.cgi", data=data, timeout=timeout)
         if response.status_code == 200:
             return response.text
         logger.error(f"Router returned error code {response.status_code} for command: {cmd}")
@@ -115,8 +135,8 @@ def run_cmd_output(router, headers, cmd, timeout=15):
         return None
 
 # ========= LOCKDOWN LOGIC =========
-def _kick_non_allowed_devices(router, headers):
-    output = run_cmd_output(router, headers, f"wl -i {WIFI_IFACE} assoclist")
+def _kick_non_allowed_devices():
+    output = run_cmd_output(f"wl -i {WIFI_IFACE} assoclist")
     if not output:
         return
     connected_macs = re.findall(r"([0-9A-Fa-f]{2}(?::[0-9A-Fa-f]{2}){5})", output)
@@ -124,65 +144,72 @@ def _kick_non_allowed_devices(router, headers):
         mac = mac.upper()
         if mac not in ALLOWED_MACS:
             logger.info(f"Kicking non-allowed device during lockdown: {mac}")
-            run_cmd(router, headers, f"wl -i {WIFI_IFACE} deauthenticate {mac}")
+            run_cmd(f"wl -i {WIFI_IFACE} deauthenticate {mac}")
 
-def enable_lockdown(router, headers, force_lock=False):
+def enable_lockdown(force_lock=False):
     mode = "FORCE (Whitelist only)" if force_lock else "NORMAL (Banning list)"
     logger.info(f"Applying Firewall Lockdown: Mode={mode}")
 
-    run_cmd(router, headers, "iptables -F LOCKDOWN 2>/dev/null")
-    run_cmd(router, headers, "iptables -X LOCKDOWN 2>/dev/null")
-    run_cmd(router, headers, "iptables -N LOCKDOWN 2>/dev/null")
+    run_cmd("iptables -F LOCKDOWN 2>/dev/null")
+    run_cmd("iptables -X LOCKDOWN 2>/dev/null")
+    run_cmd("iptables -N LOCKDOWN 2>/dev/null")
 
     if force_lock:
         for mac in ALLOWED_MACS:
-            run_cmd(router, headers, f"iptables -A LOCKDOWN -m mac --mac-source {mac} -j ACCEPT")
-        run_cmd(router, headers, "iptables -A LOCKDOWN -j DROP")
+            if is_valid_mac(mac):
+                run_cmd(f"iptables -A LOCKDOWN -m mac --mac-source {mac} -j ACCEPT")
+        run_cmd("iptables -A LOCKDOWN -j DROP")
         logger.debug(f"Whitelist applied: {len(ALLOWED_MACS)} devices allowed, others dropped.")
     else:
         for mac in BANNED_MACS:
-            run_cmd(router, headers, f"iptables -A LOCKDOWN -m mac --mac-source {mac} -j DROP")
+            if is_valid_mac(mac):
+                run_cmd(f"iptables -A LOCKDOWN -m mac --mac-source {mac} -j DROP")
         for mac in ALLOWED_MACS:
-            run_cmd(router, headers, f"iptables -A LOCKDOWN -m mac --mac-source {mac} -j ACCEPT")
-        run_cmd(router, headers, "iptables -A LOCKDOWN -j ACCEPT")
+            if is_valid_mac(mac):
+                run_cmd(f"iptables -A LOCKDOWN -m mac --mac-source {mac} -j ACCEPT")
+        run_cmd("iptables -A LOCKDOWN -j ACCEPT")
         logger.debug(f"Banned list applied: {len(BANNED_MACS)} devices dropped.")
 
-    run_cmd(router, headers, "iptables -D FORWARD -i br0 -j LOCKDOWN 2>/dev/null")
-    run_cmd(router, headers, "iptables -I FORWARD 1 -i br0 -j LOCKDOWN")
+    run_cmd("iptables -D FORWARD -i br0 -j LOCKDOWN 2>/dev/null")
+    run_cmd("iptables -I FORWARD 1 -i br0 -j LOCKDOWN")
     logger.info("Firewall rules synchronized successfully.")
 
     if force_lock:
-        _kick_non_allowed_devices(router, headers)
+        _kick_non_allowed_devices()
 
-def ban_mac(router, headers, mac, reason="manual"):
+def ban_mac(mac, reason="manual"):
     mac = mac.upper()
+    if not is_valid_mac(mac):
+        logger.error(f"Invalid MAC format attempt: {mac}")
+        return
     if mac not in BANNED_MACS:
         BANNED_MACS.add(mac)
         db.ban_device(mac, reason=reason)
         logger.info(f"Internal: Added {mac} to banned set (reason={reason}).")
-        enable_lockdown(router, headers, force_lock=LOCKDOWN_STATE)
+        enable_lockdown(force_lock=LOCKDOWN_STATE)
     else:
         logger.warning(f"Internal: {mac} is already in banned set, skipping rewrite.")
 
-def unban_mac(router, headers, mac):
+def unban_mac(mac):
     mac = mac.upper()
+    if not is_valid_mac(mac):
+        return
     if mac in BANNED_MACS:
         BANNED_MACS.remove(mac)
         db.unban_device(mac)
         logger.info(f"Internal: Removed {mac} from banned set.")
-        enable_lockdown(router, headers, force_lock=LOCKDOWN_STATE)
+        enable_lockdown(force_lock=LOCKDOWN_STATE)
     else:
         logger.warning(f"Internal: Attempted to unban {mac} but it wasn't in the list.")
 
 # ========= RADIUS =========
 def _fetch_radius_traffic():
-    session = requests.Session()
     md5_password = hex_md5(D_PASSWORD)
     md5_final    = hex_hmac_md5(D_USERNAME, md5_password)
     payload = {"username": D_USERNAME, "md5": md5_final, "Submit": "Submit"}
-    session.post(f"{RADIUS_URL}/radiusmanager/user.php?cont=login", data=payload, timeout=30)
-    session.get(f"{RADIUS_URL}/radiusmanager/user.php?cont=change_lang&lang=English", timeout=30)
-    dash = session.get(f"{RADIUS_URL}/radiusmanager/user.php", timeout=30)
+    RADIUS_SESSION.post(f"{RADIUS_URL}/radiusmanager/user.php?cont=login", data=payload, timeout=30)
+    RADIUS_SESSION.get(f"{RADIUS_URL}/radiusmanager/user.php?cont=change_lang&lang=English", timeout=30)
+    dash = RADIUS_SESSION.get(f"{RADIUS_URL}/radiusmanager/user.php", timeout=30)
     soup = BeautifulSoup(dash.text, "html.parser")
     for td in soup.find_all("td"):
         if "Available total traffic" in td.get_text(strip=True):
@@ -191,16 +218,13 @@ def _fetch_radius_traffic():
 
 def _apply_lockdown_for_traffic(traffic_value):
     global LOCKDOWN_STATE
-    router  = requests.Session()
-    router.auth = ROUTER_AUTH
-    headers = {"Content-Type": "text/plain;charset=UTF-8", "Referer": ROUTER_URL + "/", "Origin": ROUTER_URL}
     if traffic_value < THRESHOLD:
-        enable_lockdown(router, headers, force_lock=True)
+        enable_lockdown(force_lock=True)
         LOCKDOWN_STATE = True
         db.set_lockdown_state(True)
         return "`❌` System Lockdown", 0xff4747
     else:
-        enable_lockdown(router, headers, force_lock=False)
+        enable_lockdown(force_lock=False)
         LOCKDOWN_STATE = False
         db.set_lockdown_state(False)
         return "`✅` System Normal", 0x47ff7e
@@ -235,14 +259,13 @@ async def async_check_and_lock(bot_instance):
 
 # ========= GET BALANCE =========
 def get_balance():
-    session = requests.Session()
     md5_password = hex_md5(D_PASSWORD)
     md5_final    = hex_hmac_md5(D_USERNAME, md5_password)
     payload = {"username": D_USERNAME, "md5": md5_final, "Submit": "Submit"}
     try:
-        session.post(f"{RADIUS_URL}/radiusmanager/user.php?cont=login", data=payload, timeout=30).raise_for_status()
-        session.get(f"{RADIUS_URL}/radiusmanager/user.php?cont=change_lang&lang=English", timeout=30)
-        dash = session.get(f"{RADIUS_URL}/radiusmanager/user.php", timeout=30)
+        RADIUS_SESSION.post(f"{RADIUS_URL}/radiusmanager/user.php?cont=login", data=payload, timeout=30).raise_for_status()
+        RADIUS_SESSION.get(f"{RADIUS_URL}/radiusmanager/user.php?cont=change_lang&lang=English", timeout=30)
+        dash = RADIUS_SESSION.get(f"{RADIUS_URL}/radiusmanager/user.php", timeout=30)
         dash.raise_for_status()
         soup = BeautifulSoup(dash.text, "html.parser")
         for td in soup.find_all("td"):
@@ -261,14 +284,11 @@ def get_balance():
     return None
 
 # ========= NETWORK USAGE HELPERS =========
-urllib3.disable_warnings()
 
 def bytes_to_mb(value):
     return value / (1024 * 1024)
 
 def format_data_size(value_gb):
-    """Display a GB value the friendly way: MB below 1GB, GB otherwise.
-    Avoids ugly numbers like '0.49 GB' when the user set a limit in MB."""
     if value_gb >= 1:
         return f"{value_gb:.2f} GB"
     return f"{round(value_gb * 1024)} MB"
@@ -280,20 +300,15 @@ def _decode_date(n):
     return year, month, day
 
 def get_speed_history():
-    router = requests.Session()
-    router.auth   = ROUTER_AUTH
-    router.verify = False
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
         "Accept": "*/*",
-        "Origin": ROUTER_URL,
-        "Referer": f"{ROUTER_URL}/bwm-ipt-24.asp",
         "X-Requested-With": "XMLHttpRequest"
     }
     try:
         url = f"{ROUTER_URL}/update.cgi"
-        router.post(url, headers=headers, data="exec=ipt_bandwidth&arg0=start&_http_id=TIDe5b1505eeac7f67f", timeout=10)
-        r = router.post(url, headers=headers, data="exec=ipt_bandwidth&arg0=speed&_http_id=TIDe5b1505eeac7f67f", timeout=30)
+        ROUTER_SESSION.post(url, headers=headers, data="exec=ipt_bandwidth&arg0=start&_http_id=TIDe5b1505eeac7f67f", timeout=10)
+        r = ROUTER_SESSION.post(url, headers=headers, data="exec=ipt_bandwidth&arg0=speed&_http_id=TIDe5b1505eeac7f67f", timeout=30)
         match = re.search(r"speed_history\s*=\s*(\{.*?\});", r.text, re.DOTALL)
         if not match:
             logger.warning("speed_history block not found in router response.")
@@ -304,19 +319,14 @@ def get_speed_history():
         return {}
 
 def get_daily_history():
-    router = requests.Session()
-    router.auth   = ROUTER_AUTH
-    router.verify = False
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
         "Accept": "*/*",
-        "Origin": ROUTER_URL,
-        "Referer": f"{ROUTER_URL}/bwm-ipt-daily.asp",
         "X-Requested-With": "XMLHttpRequest"
     }
     try:
         url = f"{ROUTER_URL}/update.cgi"
-        r = router.post(url, headers=headers, data="exec=ipt_bandwidth&arg0=daily&_http_id=TIDe5b1505eeac7f67f", timeout=30)
+        r = ROUTER_SESSION.post(url, headers=headers, data="exec=ipt_bandwidth&arg0=daily&_http_id=TIDe5b1505eeac7f67f", timeout=30)
         match = re.search(r"daily_history\s*=\s*(\[.*?\]);", r.text, re.DOTALL)
         if not match:
             logger.warning("daily_history block not found in router response.")
@@ -346,7 +356,6 @@ def get_today_usage(daily_history):
     return result
 
 def get_today_combined(speed_history, daily_history):
-
     jffs_today = get_today_usage(daily_history)
     result = {}
     for ip, data in jffs_today.items():
@@ -364,9 +373,6 @@ def get_today_combined(speed_history, daily_history):
 def _get_today_usage_by_mac():
     speed_history = get_speed_history()
     daily_history = get_daily_history()
-    # Use the accumulative cache so a device that went to sleep
-    # after heavy usage is still counted toward its daily limit.
-    # _fetch_devlist() also updates the cache with current leases.
     dhcp_leases, _, _ = _fetch_devlist()
     ip_to_mac = dict(IP_TO_MAC_CACHE)
     combined_usage = get_today_combined(speed_history, daily_history)
@@ -380,13 +386,9 @@ def _get_today_usage_by_mac():
     return usage_by_mac
 
 def _fetch_devlist():
-    router = requests.Session()
-    router.auth   = ROUTER_AUTH
-    router.verify = False
-    url     = f"{ROUTER_URL}/update.cgi"
-    data    = "exec=devlist&_http_id=TIDe5b1505eeac7f67f"
-    headers = {"Content-Type": "text/plain;charset=UTF-8", "Referer": ROUTER_URL + "/", "Origin": ROUTER_URL}
-    r = router.post(url, headers=headers, data=data, timeout=30)
+    url  = f"{ROUTER_URL}/update.cgi"
+    data = "exec=devlist&_http_id=TIDe5b1505eeac7f67f"
+    r = ROUTER_SESSION.post(url, data=data, timeout=30)
 
     dhcp_match  = re.search(r"dhcpd_lease\s*=\s*(\[.*?\]);", r.text)
     wldev_match = re.search(r"wldev\s*=\s*(\[.*?\]);", r.text)
@@ -399,7 +401,7 @@ def _fetch_devlist():
     dhcp_leases   = demjson3.decode(dhcp_match.group(1))
     wireless_devs = demjson3.decode(wldev_match.group(1))
     arp_list      = demjson3.decode(arp_match.group(1))
-    # --- IP→MAC cache update (accumulative, survives device sleep) ---
+    
     global IP_TO_MAC_CACHE
     for lease in dhcp_leases:
         ip = lease[1]
@@ -415,7 +417,6 @@ def _fetch_devlist():
                 f"to {new_name} ({mac}) — daily usage may be inaccurate."
             )
         IP_TO_MAC_CACHE[ip] = mac
-    # -------------------------------------------------------------------
     return dhcp_leases, wireless_devs, arp_list
 
 def _fetch_devlist_and_discover(bot_instance):
@@ -444,10 +445,7 @@ def _fetch_devlist_and_discover(bot_instance):
 
 # ========= DAILY LIMIT ROUTER RESET =========
 def _reset_ip_traffic_stats():
-    router = requests.Session()
-    router.auth   = ROUTER_AUTH
-    router.verify = False
-    headers = {"Content-Type": "application/x-www-form-urlencoded", "Referer": ROUTER_URL + "/", "Origin": ROUTER_URL}
+    headers = {"Content-Type": "application/x-www-form-urlencoded"}
     data = (
         "_nextpage=%2F%23admin-iptraffic.asp&_service=cstatsnew-restart&cstats_enable=1"
         "&cstats_path=%2Fjffs%2F&cstats_sshut=1&cstats_bak=0&cstats_all=1&f_cstats_enable=on"
@@ -455,7 +453,7 @@ def _reset_ip_traffic_stats():
         "&cstats_exclude=&f_all=on&cstats_labels=0&_http_id=TIDe5b1505eeac7f67f"
     )
     try:
-        response = router.post(f"{ROUTER_URL}/tomato.cgi", headers=headers, data=data, timeout=30)
+        response = ROUTER_SESSION.post(f"{ROUTER_URL}/tomato.cgi", headers=headers, data=data, timeout=30)
         if response.status_code == 200:
             logger.info("IP Traffic stats reset successfully.")
             return True
@@ -466,10 +464,7 @@ def _reset_ip_traffic_stats():
         return False
 
 def _reset_bandwidth_stats():
-    router = requests.Session()
-    router.auth   = ROUTER_AUTH
-    router.verify = False
-    headers = {"Content-Type": "application/x-www-form-urlencoded", "Referer": ROUTER_URL + "/", "Origin": ROUTER_URL}
+    headers = {"Content-Type": "application/x-www-form-urlencoded"}
     data = (
         "_nextpage=%2F%23admin-bwm.asp&_service=rstatsnew-restart&rstats_enable=1"
         "&rstats_path=%2Fjffs%2F&rstats_sshut=1&rstats_bak=0&f_rstats_enable=on"
@@ -477,7 +472,7 @@ def _reset_bandwidth_stats():
         "&rstats_offset=1&rstats_exclude=&_http_id=TIDe5b1505eeac7f67f"
     )
     try:
-        response = router.post(f"{ROUTER_URL}/tomato.cgi", headers=headers, data=data, timeout=30)
+        response = ROUTER_SESSION.post(f"{ROUTER_URL}/tomato.cgi", headers=headers, data=data, timeout=30)
         if response.status_code == 200:
             logger.info("Bandwidth stats reset successfully.")
             return True
@@ -490,12 +485,8 @@ def _reset_bandwidth_stats():
 # ========= STATUS OF SERVICES =========
 def _check_jffs2():
     try:
-        router = requests.Session()
-        router.auth = ROUTER_AUTH
-        headers = {"Content-Type": "text/plain;charset=UTF-8", "Referer": ROUTER_URL + "/", "Origin": ROUTER_URL}
-        r = router.post(
+        r = ROUTER_SESSION.post(
             f"{ROUTER_URL}/shell.cgi",
-            headers=headers,
             data="action=execute&command=df -h\n&_http_id=TIDe5b1505eeac7f67f",
             timeout=10
         )
@@ -514,12 +505,8 @@ def _check_jffs2():
 
 def _check_wan_status():
     try:
-        router = requests.Session()
-        router.auth = ROUTER_AUTH
-        headers = {"Content-Type": "text/plain;charset=UTF-8", "Referer": ROUTER_URL + "/", "Origin": ROUTER_URL}
-        r = router.post(
+        r = ROUTER_SESSION.post(
             f"{ROUTER_URL}/shell.cgi",
-            headers=headers,
             data="action=execute&command=nvram get wan_ipaddr\n&_http_id=TIDe5b1505eeac7f67f",
             timeout=10
         )
@@ -544,12 +531,8 @@ def _check_ip_traffic_service():
 def check_bot_services():
     status = {}
     try:
-        router  = requests.Session()
-        router.auth = ROUTER_AUTH
-        headers = {"Referer": f"{ROUTER_URL}/", "User-Agent": "Mozilla/5.0"}
-        r = router.post(
+        r = ROUTER_SESSION.post(
             f"{ROUTER_URL}/shell.cgi",
-            headers=headers,
             data="action=execute&command=true\n&_http_id=TIDe5b1505eeac7f67f",
             timeout=10
         )
@@ -563,7 +546,7 @@ def check_bot_services():
     status["ip_traffic"] = _check_ip_traffic_service()
 
     try:
-        r = requests.get(f"{RADIUS_URL}/radiusmanager/user.php", timeout=10)
+        r = RADIUS_SESSION.get(f"{RADIUS_URL}/radiusmanager/user.php", timeout=10)
         status["radius"] = "READY" if r.status_code == 200 else "DOWN"
     except Exception as e:
         logger.error(f"Radius check failed: {e}")
@@ -573,13 +556,9 @@ def check_bot_services():
 
 # ========= ROUTER REBOOT =========
 def _reboot_router():
-    router = requests.Session()
-    router.auth   = ROUTER_AUTH
-    router.verify = False
-    headers = {"Content-Type": "text/plain;charset=UTF-8", "Referer": ROUTER_URL + "/", "Origin": ROUTER_URL}
     data = "action=execute&command=reboot\n&_http_id=TIDe5b1505eeac7f67f"
     try:
-        response = router.post(f"{ROUTER_URL}/shell.cgi", headers=headers, data=data, timeout=10)
+        response = ROUTER_SESSION.post(f"{ROUTER_URL}/shell.cgi", data=data, timeout=10)
         if response.status_code == 200:
             logger.warning("Reboot command acknowledged by router (HTTP 200).")
             return True
@@ -594,13 +573,8 @@ def _reboot_router():
 
 def _is_router_alive():
     try:
-        router = requests.Session()
-        router.auth   = ROUTER_AUTH
-        router.verify = False
-        headers = {"Referer": f"{ROUTER_URL}/", "User-Agent": "Mozilla/5.0"}
-        r = router.post(
+        r = ROUTER_SESSION.post(
             f"{ROUTER_URL}/shell.cgi",
-            headers=headers,
             data="action=execute&command=true\n&_http_id=TIDe5b1505eeac7f67f",
             timeout=5
         )
@@ -621,8 +595,6 @@ async def _wait_for_router_and_notify(channel, user_mention):
         except Exception as e:
             logger.error(f"Error while checking router recovery: {e}")
             alive = False
-
-        logger.debug(f"Router recovery check #{waited // interval + 1}: alive={alive} (waited {waited}s/{max_wait}s)")
 
         if alive:
             embed = discord.Embed(
@@ -653,13 +625,8 @@ async def _wait_for_router_and_notify(channel, user_mention):
 # ========= ROUTER HEARTBEAT =========
 def _router_heartbeat():
     try:
-        router = requests.Session()
-        router.auth   = ROUTER_AUTH
-        router.verify = False
-        headers = {"Referer": f"{ROUTER_URL}/", "User-Agent": "Mozilla/5.0"}
-        router.post(
+        ROUTER_SESSION.post(
             f"{ROUTER_URL}/shell.cgi",
-            headers=headers,
             data="action=execute&command=true\n&_http_id=TIDe5b1505eeac7f67f",
             timeout=10
         )
@@ -675,13 +642,10 @@ REPORT_TIME = time(hour=23, minute=55, tzinfo=ZoneInfo("Africa/Cairo"))
 @tasks.loop(time=REPORT_TIME)
 async def daily_network_report():
     try:
-
         async with ROUTER_LOCK:
             speed_history = await asyncio.to_thread(get_speed_history)
-
         async with ROUTER_LOCK:
             daily_history = await asyncio.to_thread(get_daily_history)
-
         async with ROUTER_LOCK:
             dhcp_leases, _, _ = await asyncio.to_thread(_fetch_devlist)
 
@@ -694,10 +658,14 @@ async def daily_network_report():
             usage_mb = bytes_to_mb(total_bytes)
             if usage_mb < 0.1:
                 continue
-            total_day_usage_mb += usage_mb
+            
             target_mac = next((mac for mac, info in devices_info.items() if info["ip"] == ip), None)
             if not target_mac:
                 continue
+            
+            # Correct total calculation (only count recognized MACs)
+            total_day_usage_mb += usage_mb
+            
             raw_name   = devices_info[target_mac]["name"]
             final_name = MACS_LIST.get(target_mac, raw_name)
             combined_data.append({"name": final_name, "usage": usage_mb})
@@ -748,22 +716,20 @@ class BulkBlockSelect(discord.ui.Select):
             logger.error(f"Failed to defer BulkBlockSelect: {e}")
             return
 
-        router = requests.Session()
-        router.auth = ROUTER_AUTH
-        headers = {"Content-Type": "text/plain;charset=UTF-8", "Referer": f"{ROUTER_URL}/", "Origin": ROUTER_URL}
         selected_macs = [m.upper() for m in self.values]
 
         def _bulk_ban():
             added = []
             for mac in selected_macs:
+                if not is_valid_mac(mac): continue
                 if mac not in BANNED_MACS:
                     BANNED_MACS.add(mac)
                     db.ban_device(mac)
                     added.append(mac)
                     logger.info(f"Internal: Added {mac} to banned set.")
             if added:
-                enable_lockdown(router, headers, force_lock=LOCKDOWN_STATE)
-            return [MACS_LIST.get(m, "Unknown") for m in selected_macs]
+                enable_lockdown(force_lock=LOCKDOWN_STATE)
+            return [MACS_LIST.get(m, "Unknown") for m in added]
 
         async with ROUTER_LOCK:
             success_list = await asyncio.to_thread(_bulk_ban)
@@ -801,18 +767,24 @@ class BulkUnblockSelect(discord.ui.Select):
             logger.error(f"Failed to defer BulkUnblockSelect: {e}")
             return
 
-        router = requests.Session()
-        router.auth = ROUTER_AUTH
-        headers = {"Content-Type": "text/plain;charset=UTF-8", "Referer": f"{ROUTER_URL}/", "Origin": ROUTER_URL}
         selected_macs = self.values
 
+        def _bulk_unban():
+            removed = []
+            for mac in selected_macs:
+                mac = mac.upper()
+                if not is_valid_mac(mac): continue
+                if mac in BANNED_MACS:
+                    BANNED_MACS.remove(mac)
+                    db.unban_device(mac)
+                    removed.append(mac)
+                    logger.info(f"Internal: Removed {mac} from banned set.")
+            if removed:
+                enable_lockdown(force_lock=LOCKDOWN_STATE)
+            return [MACS_LIST.get(m, "Unknown") for m in removed]
+
         async with ROUTER_LOCK:
-            success_list = await asyncio.to_thread(
-                lambda: [
-                    (unban_mac(router, headers, mac.upper()), MACS_LIST.get(mac.upper(), "Unknown"))[1]
-                    for mac in selected_macs
-                ]
-            )
+            success_list = await asyncio.to_thread(_bulk_unban)
 
         lines = [f"{i:02d}. {MACS_LIST.get(m, 'Unknown Device')}" for i, m in enumerate(BANNED_MACS, 1)]
         current_list = "```\n" + "\n".join(lines) + "```" if lines else "No devices currently banned"
@@ -956,10 +928,7 @@ bot = MyBot()
 
 # ========= HELPERS FOR COMMANDS =========
 def _reapply_firewall_state():
-    router  = requests.Session()
-    router.auth = ROUTER_AUTH
-    headers = {"Content-Type": "text/plain;charset=UTF-8", "Referer": ROUTER_URL + "/", "Origin": ROUTER_URL}
-    enable_lockdown(router, headers, force_lock=LOCKDOWN_STATE)
+    enable_lockdown(force_lock=LOCKDOWN_STATE)
 
 async def mac_autocomplete(interaction: discord.Interaction, current: str):
     choices = [
@@ -999,11 +968,8 @@ async def _recheck_device_after_limit_change(mac):
     if usage_gb >= effective_limit:
         return
 
-    router  = requests.Session()
-    router.auth = ROUTER_AUTH
-    headers = {"Content-Type": "text/plain;charset=UTF-8", "Referer": ROUTER_URL + "/", "Origin": ROUTER_URL}
     async with ROUTER_LOCK:
-        await asyncio.to_thread(unban_mac, router, headers, mac)
+        await asyncio.to_thread(unban_mac, mac)
 
     device_name = MACS_LIST.get(mac, mac)
     channel = bot.get_channel(CHANNEL_ID)
@@ -1032,9 +998,6 @@ async def _recheck_default_limit_devices():
     async with ROUTER_LOCK:
         usage_by_mac = await asyncio.to_thread(_get_today_usage_by_mac)
 
-    router  = requests.Session()
-    router.auth = ROUTER_AUTH
-    headers = {"Content-Type": "text/plain;charset=UTF-8", "Referer": ROUTER_URL + "/", "Origin": ROUTER_URL}
     default_limit = db.get_daily_default_limit()
     channel = bot.get_channel(CHANNEL_ID)
 
@@ -1044,7 +1007,7 @@ async def _recheck_default_limit_devices():
             continue
 
         async with ROUTER_LOCK:
-            await asyncio.to_thread(unban_mac, router, headers, mac)
+            await asyncio.to_thread(unban_mac, mac)
 
         device_name = MACS_LIST.get(mac, mac)
         if channel:
@@ -1064,6 +1027,50 @@ async def _recheck_default_limit_devices():
 
 # ========= COMMANDS =========
 
+# --------- /wl (Whitelist Group) ---------
+wl_group = app_commands.Group(name="wl", description="Manage Allowed Devices (Whitelist)")
+
+@wl_group.command(name="add", description="Add a device to the whitelist")
+@app_commands.autocomplete(mac=all_macs_autocomplete)
+async def wl_add(interaction: discord.Interaction, mac: str, hostname: str = "Unknown"):
+    if not await safe_defer(interaction, thinking=True):
+        return
+    mac = mac.upper()
+    if not is_valid_mac(mac):
+        return await interaction.followup.send("`❌` Invalid MAC Address format.")
+    
+    db.add_device(mac, hostname)
+    MACS_LIST[mac] = hostname
+    db.set_device_allowed(mac, True)
+    
+    if mac not in ALLOWED_MACS:
+        ALLOWED_MACS.append(mac)
+        
+    async with ROUTER_LOCK:
+        await asyncio.to_thread(enable_lockdown, force_lock=LOCKDOWN_STATE)
+        
+    await interaction.followup.send(f"`✅` Device `{hostname}` ({mac}) added to whitelist.")
+
+@wl_group.command(name="remove", description="Remove a device from the whitelist")
+@app_commands.autocomplete(mac=all_macs_autocomplete)
+async def wl_remove(interaction: discord.Interaction, mac: str):
+    if not await safe_defer(interaction, thinking=True):
+        return
+    mac = mac.upper()
+    if not is_valid_mac(mac):
+        return await interaction.followup.send("`❌` Invalid MAC Address format.")
+
+    if mac in ALLOWED_MACS:
+        ALLOWED_MACS.remove(mac)
+        db.set_device_allowed(mac, False)
+        async with ROUTER_LOCK:
+            await asyncio.to_thread(enable_lockdown, force_lock=LOCKDOWN_STATE)
+        await interaction.followup.send(f"`✅` Device ({mac}) removed from whitelist.")
+    else:
+        await interaction.followup.send("`⚠️` Device is not in the whitelist.")
+
+bot.tree.add_command(wl_group)
+
 # --------- /blk ---------
 @bot.tree.command(name="blk", description="Ban a MAC address from the list")
 @app_commands.autocomplete(mac=mac_autocomplete)
@@ -1073,11 +1080,12 @@ async def ban(interaction: discord.Interaction, mac: str):
     logger.info(f"ACTION: /blk | User: {interaction.user} | Target: {mac}")
     try:
         mac_upper = mac.upper()
-        router    = requests.Session()
-        router.auth = ROUTER_AUTH
-        headers   = {"Content-Type": "text/plain;charset=UTF-8", "Referer": ROUTER_URL + "/", "Origin": ROUTER_URL}
+        if not is_valid_mac(mac_upper):
+            return await interaction.followup.send("`❌` Invalid MAC Address format.")
+
         async with ROUTER_LOCK:
-            await asyncio.to_thread(ban_mac, router, headers, mac_upper)
+            await asyncio.to_thread(ban_mac, mac_upper)
+            
         device_name  = MACS_LIST.get(mac_upper, "Unknown Device")
         lines        = [f"{i:02d}. {MACS_LIST.get(m, 'Unknown Device')}" for i, m in enumerate(BANNED_MACS, 1)]
         current_list = "```\n" + "\n".join(lines) + "```" if lines else "No devices currently banned"
@@ -1101,11 +1109,12 @@ async def rm(interaction: discord.Interaction, mac: str):
     logger.info(f"ACTION: /rm | User: {interaction.user} | Target MAC: {mac}")
     try:
         mac_upper = mac.upper()
-        router    = requests.Session()
-        router.auth = ROUTER_AUTH
-        headers   = {"Content-Type": "text/plain;charset=UTF-8", "Referer": ROUTER_URL + "/", "Origin": ROUTER_URL}
+        if not is_valid_mac(mac_upper):
+            return await interaction.followup.send("`❌` Invalid MAC Address format.")
+
         async with ROUTER_LOCK:
-            await asyncio.to_thread(unban_mac, router, headers, mac_upper)
+            await asyncio.to_thread(unban_mac, mac_upper)
+            
         device_name  = MACS_LIST.get(mac_upper, "Unknown Device")
         lines        = [f"{i:02d}. {MACS_LIST.get(m, 'Unknown')}" for i, m in enumerate(BANNED_MACS, 1)]
         current_list = "```\n" + "\n".join(lines) + "```" if lines else "✨ *No devices currently banned*"
@@ -1412,10 +1421,14 @@ async def netstat(interaction: discord.Interaction, view: app_commands.Choice[st
             usage_mb = bytes_to_mb(total_bytes)
             if usage_mb < 0.1:
                 continue
-            total_traffic_mb += usage_mb
+            
             target_mac = next((mac for mac, info in devices_info.items() if info["ip"] == ip), None)
             if not target_mac:
                 continue
+                
+            # Correct total calculation (only count recognized MACs)
+            total_traffic_mb += usage_mb
+            
             raw_name = devices_info[target_mac]["name"]
             combined_data.append({"name": MACS_LIST.get(target_mac, raw_name), "usage": usage_mb})
 
@@ -1501,6 +1514,9 @@ async def set_limit(
 
         if mac:
             mac_upper = mac.upper()
+            if not is_valid_mac(mac_upper):
+                return await interaction.followup.send("`❌` Invalid MAC Address format.")
+
             db.set_device_daily_limit(mac_upper, value_gb)
             device_name = MACS_LIST.get(mac_upper, mac_upper)
             logger.info(f"User {interaction.user} set custom daily limit for {mac_upper} to {value_gb} GB")
@@ -1680,7 +1696,7 @@ async def device_discovery_task():
         return
     try:
         async with ROUTER_LOCK:
-            await asyncio.to_thread(lambda: _fetch_devlist_and_discover(bot))
+            await asyncio.to_thread(_fetch_devlist_and_discover, bot)
         logger.debug("Scheduled device discovery check completed.")
     except Exception as e:
         logger.error(f"Error in device_discovery_task: {e}")
@@ -1702,10 +1718,6 @@ async def daily_usage_monitor_task():
 async def _run_daily_usage_monitor_check():
     try:
         usage_by_mac = await asyncio.to_thread(_get_today_usage_by_mac)
-
-        router  = requests.Session()
-        router.auth = ROUTER_AUTH
-        headers = {"Content-Type": "text/plain;charset=UTF-8", "Referer": ROUTER_URL + "/", "Origin": ROUTER_URL}
         channel = bot.get_channel(CHANNEL_ID)
 
         for mac, usage_gb in usage_by_mac.items():
@@ -1738,7 +1750,7 @@ async def _run_daily_usage_monitor_check():
             if mac in BANNED_MACS:
                 continue
 
-            await asyncio.to_thread(ban_mac, router, headers, mac, "daily_limit")
+            await asyncio.to_thread(ban_mac, mac, "daily_limit")
 
             logger.info(f"Auto-blocked {mac} for exceeding daily usage limit ({usage_gb:.2f}GB / {effective_limit:.2f}GB).")
 
@@ -1760,10 +1772,7 @@ async def _run_daily_usage_monitor_check():
         logger.info("Scheduled daily usage monitor check completed.")
     except Exception as e:
         logger.error(f"Error in daily_usage_monitor_task: {e}")
-    finally:
-        if ROUTER_LOCK.locked():
-            ROUTER_LOCK.release()
-            logger.debug("Router lock released by daily_usage_monitor_task.")
+
 
 @daily_usage_monitor_task.before_loop
 async def before_daily_usage_monitor():
@@ -1778,8 +1787,6 @@ MIDNIGHT_MAX_RETRIES    = 40    # safety cap (~6.5 hours) so retries don't run f
 _midnight_retry_running = False
 
 async def _run_midnight_reset_steps():
-    """Runs every step of the midnight reset once and returns the results.
-    Shared by the scheduled run and the retry loop so both behave identically."""
     async with ROUTER_LOCK:
         ip_ok = await asyncio.to_thread(_reset_ip_traffic_stats)
     await asyncio.sleep(5)
@@ -1788,22 +1795,16 @@ async def _run_midnight_reset_steps():
         bw_ok = await asyncio.to_thread(_reset_bandwidth_stats)
     await asyncio.sleep(5)
 
-    router  = requests.Session()
-    router.auth = ROUTER_AUTH
-    headers = {"Content-Type": "text/plain;charset=UTF-8", "Referer": ROUTER_URL + "/", "Origin": ROUTER_URL}
-
     daily_banned   = db.get_banned_by_reason("daily_limit")
     unbanned_count = 0
     if daily_banned:
         async with ROUTER_LOCK:
             for mac in list(daily_banned):
-                await asyncio.to_thread(unban_mac, router, headers, mac)
+                await asyncio.to_thread(unban_mac, mac)
                 unbanned_count += 1
 
-    # Custom per-device daily limits are a one-day override; every device
-    # falls back to the daily default automatically each midnight.
     cleared_overrides = await asyncio.to_thread(db.clear_all_device_daily_limits)
-    db.clear_daily_notifications()
+    await asyncio.to_thread(db.clear_daily_notifications)
 
     global IP_TO_MAC_CACHE
     IP_TO_MAC_CACHE.clear()
@@ -1822,6 +1823,7 @@ def _midnight_status_box(ip_ok, bw_ok, unbanned_count, cleared_overrides):
 
 @tasks.loop(time=MIDNIGHT_RESET_TIME)
 async def midnight_reset_task():
+    global _midnight_retry_running
     logger.info("Starting scheduled midnight reset...")
     channel = bot.get_channel(CHANNEL_ID)
     try:
@@ -1843,7 +1845,6 @@ async def midnight_reset_task():
         )
 
         if not (ip_ok and bw_ok):
-            global _midnight_retry_running
             if not _midnight_retry_running:
                 _midnight_retry_running = True
                 asyncio.create_task(_retry_midnight_reset(channel))
@@ -1863,7 +1864,6 @@ async def midnight_reset_task():
             except Exception as send_err:
                 logger.error(f"Failed to send midnight-reset crash notification: {send_err}")
 
-        global _midnight_retry_running
         if not _midnight_retry_running:
             _midnight_retry_running = True
             asyncio.create_task(_retry_midnight_reset(channel))
@@ -1871,8 +1871,6 @@ async def midnight_reset_task():
             logger.warning("Midnight retry loop already running, skipping duplicate trigger.")
 
 async def _retry_midnight_reset(channel):
-    """Keeps retrying the midnight reset every 10 minutes (e.g. router was
-    offline at 00:00) until it succeeds or the retry cap is reached."""
     global _midnight_retry_running
     attempt = 1
     try:
