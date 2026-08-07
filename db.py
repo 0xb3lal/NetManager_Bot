@@ -36,7 +36,8 @@ def get_db():
 
 
 def _column_exists(conn, table: str, column: str) -> bool:
-    rows = conn.execute(f"PRAGMA table_info({table})").fetchall()
+    # Safely escape table name using brackets to prevent SQL formatting issues
+    rows = conn.execute(f"PRAGMA table_info([{table}])").fetchall()
     return any(row["name"] == column for row in rows)
 
 
