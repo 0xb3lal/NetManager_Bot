@@ -294,8 +294,10 @@ def get_all_device_daily_limits() -> dict:
     return {row["mac"]: float(row["limit_gb"]) for row in rows}
 
 def get_effective_daily_limit(mac: str) -> float:
+    import usage_db  # local import to avoid circular import with usage_db.py
     custom = get_device_daily_limit(mac)
-    return custom if custom is not None else get_daily_default_limit()
+    base = custom if custom is not None else get_daily_default_limit()
+    return base + usage_db.get_extra_quota(mac)
 
 def clear_all_device_daily_limits() -> int:
     try:

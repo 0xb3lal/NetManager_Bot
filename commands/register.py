@@ -18,7 +18,9 @@ from .network import (
 
 from .system import (
     limit,
+    quota,
     reboot,
+    tglink
 )
 
 def setup(bot):
@@ -35,3 +37,5 @@ def setup(bot):
     purge.setup(bot)
     reboot.setup(bot)
     wl.setup(bot)
+    quota.setup(bot)
+    tglink.setup(bot)

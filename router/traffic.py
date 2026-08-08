@@ -1,12 +1,21 @@
 import re
+import time
 from datetime import datetime
 from zoneinfo import ZoneInfo
 import demjson3
+import requests
 from logger import logger
 from config import (
     ROUTER_URL,
     ROUTER_SESSION,
 )
+
+HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; x64) AppleWebKit/537.36",
+    "Accept": "*/*",
+    "X-Requested-With": "XMLHttpRequest"
+}
+
 
 def _decode_date(n):
     """Decode Tomato firmware date encoding to (year, month, day)."""
@@ -17,91 +26,98 @@ def _decode_date(n):
     return year, month, day
 
 
-def get_speed_history():
-    """Fetch current speed/traffic history from router."""
+def get_speed_history(retries=1, retry_delay=2):
+    """Fetch current speed/traffic history from router, with one automatic retry on timeout."""
 
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; x64) AppleWebKit/537.36",
-        "Accept": "*/*",
-        "X-Requested-With": "XMLHttpRequest"
-    }
+    url = f"{ROUTER_URL}/update.cgi"
 
-    try:
-        url = f"{ROUTER_URL}/update.cgi"
-
-        ROUTER_SESSION.post(
-            url,
-            headers=headers,
-            data="exec=ipt_bandwidth&arg0=start&_http_id=TIDe5b1505eeac7f67f",
-            timeout=10
-        )
-
-        r = ROUTER_SESSION.post(
-            url,
-            headers=headers,
-            data="exec=ipt_bandwidth&arg0=speed&_http_id=TIDe5b1505eeac7f67f",
-            timeout=30
-        )
-
-        match = re.search(
-            r"speed_history\s*=\s*(\{.*?\});",
-            r.text,
-            re.DOTALL
-        )
-
-        if not match:
-            logger.warning(
-                "speed_history block not found in router response."
+    for attempt in range(retries + 1):
+        try:
+            ROUTER_SESSION.post(
+                url,
+                headers=HEADERS,
+                data="exec=ipt_bandwidth&arg0=start&_http_id=TIDe5b1505eeac7f67f",
+                timeout=15
             )
+
+            r = ROUTER_SESSION.post(
+                url,
+                headers=HEADERS,
+                data="exec=ipt_bandwidth&arg0=speed&_http_id=TIDe5b1505eeac7f67f",
+                timeout=30
+            )
+
+            match = re.search(
+                r"speed_history\s*=\s*(\{.*?\});",
+                r.text,
+                re.DOTALL
+            )
+
+            if not match:
+                logger.warning(
+                    "speed_history block not found in router response."
+                )
+                return {}
+
+            return demjson3.decode(match.group(1))
+
+        except requests.exceptions.Timeout as e:
+            if attempt < retries:
+                logger.warning(
+                    f"Timeout fetching speed history (attempt {attempt + 1}/{retries + 1}), retrying in {retry_delay}s..."
+                )
+                time.sleep(retry_delay)
+                continue
+            logger.error(f"Error fetching speed history after {retries + 1} attempts: {e}")
             return {}
 
-        return demjson3.decode(match.group(1))
-
-    except Exception as e:
-        logger.error(
-            f"Error fetching speed history: {e}"
-        )
-        return {}
+        except Exception as e:
+            logger.error(f"Error fetching speed history: {e}")
+            return {}
 
 
-def get_daily_history():
-    """Fetch daily traffic history from router (JFFS2)."""
+def get_daily_history(retries=1, retry_delay=2):
+    """Fetch daily traffic history from router (JFFS2), with one automatic retry on timeout."""
 
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; x64) AppleWebKit/537.36",
-        "Accept": "*/*",
-        "X-Requested-With": "XMLHttpRequest"
-    }
+    url = f"{ROUTER_URL}/update.cgi"
 
-    try:
-        url = f"{ROUTER_URL}/update.cgi"
-
-        r = ROUTER_SESSION.post(
-            url,
-            headers=headers,
-            data="exec=ipt_bandwidth&arg0=daily&_http_id=TIDe5b1505eeac7f67f",
-            timeout=30
-        )
-
-        match = re.search(
-            r"daily_history\s*=\s*(\[.*?\]);",
-            r.text,
-            re.DOTALL
-        )
-
-        if not match:
-            logger.warning(
-                "daily_history block not found in router response."
+    for attempt in range(retries + 1):
+        try:
+            r = ROUTER_SESSION.post(
+                url,
+                headers=HEADERS,
+                data="exec=ipt_bandwidth&arg0=daily&_http_id=TIDe5b1505eeac7f67f",
+                timeout=30
             )
+
+            match = re.search(
+                r"daily_history\s*=\s*(\[.*?\]);",
+                r.text,
+                re.DOTALL
+            )
+
+            if not match:
+                logger.warning(
+                    "daily_history block not found in router response."
+                )
+                return []
+
+            return demjson3.decode(match.group(1))
+
+        except requests.exceptions.Timeout as e:
+            if attempt < retries:
+                logger.warning(
+                    f"Timeout fetching daily history (attempt {attempt + 1}/{retries + 1}), retrying in {retry_delay}s..."
+                )
+                time.sleep(retry_delay)
+                continue
+            logger.error(f"Error fetching daily history after {retries + 1} attempts: {e}")
             return []
 
-        return demjson3.decode(match.group(1))
+        except Exception as e:
+            logger.error(f"Error fetching daily history: {e}")
+            return []
 
-    except Exception as e:
-        logger.error(
-            f"Error fetching daily history: {e}"
-        )
-        return []
 
 def get_today_usage(daily_history):
     """Extract today's usage data from daily history."""

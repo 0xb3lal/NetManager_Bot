@@ -1,38 +1,31 @@
 import asyncio
-
 import discord
 from discord import app_commands
-
+import db
+from logger import logger
+from state import ROUTER_LOCK, state
 from tasks.traffic_check import setup_traffic_check_task
 from tasks.device_discovery import setup_device_discovery_task
 from tasks.daily_usage_monitor import setup_daily_usage_monitor_task
 from tasks.daily_report import setup_daily_network_report_task
 from tasks.midnight_reset import setup_midnight_reset_task
-
 from router.firewall import _reapply_firewall_state
-
-import db
-
-from logger import logger
-from state import ROUTER_LOCK, state
 from commands.register import setup
-
+import usage_db
+import telegram.db as telegram_db
 from config import (
     DISCORD_TOKEN,
     GUILD_ID,
 )
 
-# =============================================================================================
-# SECTION 1: STARTUP — DATABASE & STATE INITIALIZATION
-# =============================================================================================
+# DATABASE & STATE INITIALIZATION
 
 db.init_db()
+usage_db.init_usage_tables()
+telegram_db.init_telegram_tables()
 state.reload_from_db()
 
-
-# =============================================================================================
-# SECTION 2: BOT CLIENT
-# =============================================================================================
+# BOT CLIENT
 
 class MyBot(discord.Client):
     """Main Discord bot client with command tree."""
@@ -110,10 +103,7 @@ class MyBot(discord.Client):
         async with ROUTER_LOCK:
             await asyncio.to_thread(_reapply_firewall_state)
 
-
-# =============================================================================================
-# SECTION 3: MAIN ENTRY POINT
-# =============================================================================================
+# MAIN ENTRY POINT
 
 async def main():
     """Main bot entry point with automatic restart on fatal errors."""

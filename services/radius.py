@@ -1,30 +1,23 @@
 import asyncio
 import requests
 import discord
-
 from bs4 import BeautifulSoup
-
 import db
-
 from config import (
     D_USERNAME,
     D_PASSWORD,
     RADIUS_URL,
     CHANNEL_ID,
 )
-
 from logger import logger
 from state import state, ROUTER_LOCK
-
 from router.firewall import enable_lockdown
-
 from radius.auth import (
     hex_md5,
     hex_hmac_md5,
 )
 
-from utils.traffic import parse_traffic_to_gb
-
+from utils.traffic import parse_traffic_to_gb, format_data_size
 
 RADIUS_SESSION = requests.Session()
 
@@ -184,7 +177,7 @@ async def async_check_and_lock(bot_instance):
         status_box = (
             "```\n"
             f"{'Balance:'.ljust(9)} {available_traffic}\n"
-            f"{'Limit:'.ljust(9)} {state.threshold} GB\n"
+            f"{'Limit:'.ljust(9)} {format_data_size(state.threshold)}\n"
             "```"
         )
 

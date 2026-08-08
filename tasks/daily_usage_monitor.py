@@ -1,15 +1,14 @@
 import asyncio
-
 import discord
-from discord.ext import tasks
-
 import db
+from discord.ext import tasks
 from logger import logger
 from state import ROUTER_LOCK, state
+from config import CHANNEL_ID
 from router.firewall import enable_lockdown
 from services.traffic import get_today_usage_by_mac
 from utils.traffic import format_data_size
-from config import CHANNEL_ID
+from services.usage_alerts import check_and_send_threshold_alerts
 
 
 def setup_daily_usage_monitor_task(bot):
@@ -45,10 +44,18 @@ async def _run_daily_usage_monitor_check(bot):
 
         for mac, usage_gb in usage_by_mac.items():
             effective_limit = db.get_effective_daily_limit(mac)
-            if usage_gb < effective_limit:
+            if effective_limit <= 0:
                 continue
 
             device_name = state.macs_list.get(mac, mac)
+
+            # --- Telegram threshold alerts (50% / 75% / 100%) ---
+            await check_and_send_threshold_alerts(
+                mac, device_name, usage_gb, effective_limit
+            )
+
+            if usage_gb < effective_limit:
+                continue
 
             if mac in state.allowed_macs:
                 if not db.was_notified_today(mac):

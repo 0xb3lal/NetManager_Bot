@@ -1,6 +1,7 @@
 import asyncio
 import discord
 import db
+import usage_db
 from config import CHANNEL_ID
 from state import state, ROUTER_LOCK
 from services.traffic import get_today_usage_by_mac
@@ -99,3 +100,28 @@ async def recheck_default_limit_devices(bot_instance):
             )
 
             await channel.send(embed=embed)
+
+async def add_extra_quota_covering_overage(bot_instance, mac, amount_gb):
+    """
+    Add extra quota to a device, guaranteeing the requested amount becomes real,
+    additional usable data — even if the device is currently over its limit
+    (e.g. already blocked). Any existing overage is absorbed first, so the
+    device always ends up with exactly `amount_gb` of new headroom.
+    Returns (new_extra_total, new_effective_limit).
+    """
+    async with ROUTER_LOCK:
+        usage_by_mac = await asyncio.to_thread(get_today_usage_by_mac)
+
+    usage_gb = usage_by_mac.get(mac, 0)
+    current_effective_limit = db.get_effective_daily_limit(mac)
+    current_extra = usage_db.get_extra_quota(mac)
+
+    deficit = max(usage_gb - current_effective_limit, 0)
+    new_extra_total = current_extra + amount_gb + deficit
+
+    usage_db.set_extra_quota(mac, new_extra_total)
+    new_effective_limit = db.get_effective_daily_limit(mac)
+
+    await recheck_device_after_limit_change(bot_instance, mac)
+
+    return new_extra_total, new_effective_limit

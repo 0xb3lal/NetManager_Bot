@@ -2,12 +2,7 @@ import os
 import urllib3
 import requests
 import discord
-
 from dotenv import load_dotenv
-
-# =============================================================================================
-# CONFIG & STARTUP VALIDATION
-# =============================================================================================
 
 load_dotenv()
 
@@ -41,10 +36,9 @@ CHANNEL_ID = int(os.getenv("CHANNEL_ID"))
 
 WIFI_IFACE = os.getenv("WIFI_IFACE", "eth1")
 
-# =============================================================================================
+# Telegram bot token and chat ID for notifications
+TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 # GLOBAL SESSIONS
-# =============================================================================================
-
 urllib3.disable_warnings()
 
 ROUTER_SESSION = requests.Session()
