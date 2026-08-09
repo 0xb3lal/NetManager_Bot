@@ -35,6 +35,70 @@ async def send_message(chat_id: str, text: str) -> bool:
         logger.error(f"Error sending Telegram message to {chat_id}: {e}")
         return False
 
+# Add this function to telegram/client.py, below send_message()
+
+async def get_updates(offset: int | None = None, timeout: int = 30) -> list:
+    """
+    Long-poll Telegram for new incoming updates (messages) since `offset`.
+    Blocks up to `timeout` seconds server-side if there's nothing new yet —
+    this is the standard Telegram long-polling pattern, so callers should
+    just loop and call this repeatedly without extra sleeps.
+    """
+    if not TELEGRAM_BOT_TOKEN:
+        return []
+
+    params = {"timeout": timeout}
+    if offset is not None:
+        params["offset"] = offset
+
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(
+                f"{TELEGRAM_API_BASE}/getUpdates",
+                params=params,
+                timeout=aiohttp.ClientTimeout(total=timeout + 10)
+            ) as resp:
+                if resp.status != 200:
+                    body = await resp.text()
+                    logger.error(f"Telegram getUpdates failed ({resp.status}): {body}")
+                    return []
+                data = await resp.json()
+                return data.get("result", [])
+    except Exception as e:
+        logger.error(f"Error polling Telegram updates: {e}")
+        return []
+
+async def set_bot_commands() -> bool:
+    """
+    Register the bot's command list with Telegram so it shows up in the
+    "/" menu button in every chat with the bot. Call this once at startup
+    (safe to call every time — Telegram just overwrites the list).
+    """
+    if not TELEGRAM_BOT_TOKEN:
+        return False
+
+    commands = [
+        {"command": "usage", "description": "Check your current daily usage"},
+        {"command": "start", "description": "Get started / link info"},
+    ]
+
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.post(
+                f"{TELEGRAM_API_BASE}/setMyCommands",
+                json={"commands": commands},
+                timeout=aiohttp.ClientTimeout(total=10)
+            ) as resp:
+                if resp.status != 200:
+                    body = await resp.text()
+                    logger.error(f"Telegram setMyCommands failed ({resp.status}): {body}")
+                    return False
+                logger.info("Telegram bot command menu registered.")
+                return True
+    except Exception as e:
+        logger.error(f"Error setting Telegram bot commands: {e}")
+        return False
+    
 async def get_updates(offset: int | None = None, timeout: int = 30) -> list:
     """
     Long-poll Telegram for new incoming updates (messages) since `offset`.

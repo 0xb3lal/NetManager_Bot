@@ -13,11 +13,11 @@ from router.firewall import _reapply_firewall_state
 from commands.register import setup
 import usage_db
 import telegram.db as telegram_db
+from telegram.polling import initialize_telegram_bot, start_telegram_polling
 from config import (
     DISCORD_TOKEN,
     GUILD_ID,
 )
-
 # DATABASE & STATE INITIALIZATION
 
 db.init_db()
@@ -77,6 +77,13 @@ class MyBot(discord.Client):
         midnight_reset_task = setup_midnight_reset_task(self)
         if not midnight_reset_task.is_running():
             midnight_reset_task.start()
+
+        # Telegram command menu + incoming-message polling.
+        # Independent of Discord Gateway state, so setup_hook (called once
+        # per process before on_ready) is the right place — no need to
+        # wait for guild/cache readiness like on_ready-dependent logic.
+        await initialize_telegram_bot()
+        start_telegram_polling()
 
     async def on_disconnect(self):
         logger.warning(
