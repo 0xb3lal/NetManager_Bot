@@ -38,8 +38,6 @@ async def handle_usage_command(chat_id: str, first_name: str = ""):
 
     if is_banned:
         status = "🚫 Blocked"
-    elif is_whitelisted:
-        status = "✅ Active (never auto-blocked)"
     elif usage_gb >= effective_limit:
         status = "⚠️ Over limit"
     else:
@@ -48,6 +46,7 @@ async def handle_usage_command(chat_id: str, first_name: str = ""):
     lines = [
         f"{'Device:'.ljust(13)} {device_name}",
         f"{'Status:'.ljust(13)} {status}",
+        f"{'White listed:'.ljust(13)} {'Yes' if is_whitelisted else 'No'}",
         f"{'Used Today:'.ljust(13)} {format_data_size(usage_gb)}",
         f"{'Base Limit:'.ljust(13)} {format_data_size(base_limit)}",
     ]
