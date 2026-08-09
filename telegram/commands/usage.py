@@ -1,37 +1,17 @@
 import asyncio
-
-from logger import logger
 from state import state
-
 import db
 import usage_db
 import telegram.db as telegram_db
 import telegram.client as telegram_client
 from services.traffic import get_today_usage_by_mac
 from utils.traffic import format_data_size
+from telegram.commands.register import command
 
 
-async def handle_update(update: dict):
-    """Route a single Telegram update to the right command handler."""
-    message = update.get("message")
-    if not message or "text" not in message:
-        return
-
-    chat_id = str(message["chat"]["id"])
-    text = message["text"].strip()
-
-    if text.startswith("/usage"):
-        await _handle_usage_command(chat_id)
-    elif text.startswith("/start"):
-        await telegram_client.send_message(
-            chat_id,
-            "👋 Welcome. Send /usage anytime to check your current daily usage."
-        )
-    # Unknown commands are ignored on purpose — no need to spam replies
-    # for random messages sent to the bot.
-
-
-async def _handle_usage_command(chat_id: str):
+@command("/usage")
+async def handle_usage_command(chat_id: str, first_name: str = ""):
+    """Reply to /usage with the sender's device usage details for today."""
     mac = telegram_db.get_mac_by_chat_id(chat_id)
     if not mac:
         await telegram_client.send_message(
