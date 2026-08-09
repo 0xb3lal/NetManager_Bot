@@ -75,7 +75,7 @@ def setup(bot):
         mac: str,
         action: app_commands.Choice[str],
         value: float,
-        unit: app_commands.Choice[str] = None
+        unit: app_commands.Choice[str]
     ):
         if not await safe_defer(interaction, thinking=True):
             return
@@ -87,7 +87,7 @@ def setup(bot):
                 await interaction.followup.send("`❌` Invalid MAC Address format.")
                 return
 
-            unit_value = unit.value if unit else "GB"
+            unit_value = unit.value
             value_gb = value / 1024 if unit_value == "MB" else value
 
             is_suspicious = value_gb < SUSPICIOUS_LOW_GB or value_gb > SUSPICIOUS_HIGH_GB

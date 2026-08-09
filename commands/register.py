@@ -20,7 +20,8 @@ from .system import (
     limit,
     quota,
     reboot,
-    tglink
+    tglink,
+    device
 )
 
 def setup(bot):
@@ -39,3 +40,4 @@ def setup(bot):
     wl.setup(bot)
     quota.setup(bot)
     tglink.setup(bot)
+    device.setup(bot)
