@@ -5,7 +5,7 @@ import usage_db
 import telegram.db as telegram_db
 import telegram.client as telegram_client
 from config import CHANNEL_ID
-from state import state, ROUTER_LOCK
+from state import state, ROUTER_LOCK, QUOTA_LOCK
 from services.traffic import get_today_usage_by_mac
 from router.firewall import unban_mac
 from utils.traffic import format_data_size
@@ -115,13 +115,16 @@ async def add_extra_quota_covering_overage(bot_instance, mac, amount_gb):
         usage_by_mac = await asyncio.to_thread(get_today_usage_by_mac)
 
     usage_gb = usage_by_mac.get(mac, 0)
-    current_effective_limit = db.get_effective_daily_limit(mac)
-    current_extra = usage_db.get_extra_quota(mac)
 
-    deficit = max(usage_gb - current_effective_limit, 0)
-    new_extra_total = current_extra + amount_gb + deficit
+    async with QUOTA_LOCK:
+        current_effective_limit = db.get_effective_daily_limit(mac)
+        current_extra = usage_db.get_extra_quota(mac)
 
-    usage_db.set_extra_quota(mac, new_extra_total)
+        deficit = max(usage_gb - current_effective_limit, 0)
+        new_extra_total = current_extra + amount_gb + deficit
+
+        usage_db.set_extra_quota(mac, new_extra_total)
+
     telegram_db.reset_notified_thresholds(mac)
     new_effective_limit = db.get_effective_daily_limit(mac)
 

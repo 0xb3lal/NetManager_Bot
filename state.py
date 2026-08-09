@@ -49,3 +49,11 @@ state = BotState()
 # bot_core) so command files can import it without importing the bot
 # itself.
 ROUTER_LOCK = asyncio.Lock()
+
+# Shared lock serializing read-modify-write operations on a device's extra
+# quota (usage_db.extra_quota table). Without this, two near-simultaneous
+# /quota calls (e.g. an add racing an edit, or a double-fired interaction)
+# can both read the same starting value and one update silently overwrites
+# the other. Always hold this around any get_extra_quota() + set_extra_quota()
+# pair that depends on the value just read.
+QUOTA_LOCK = asyncio.Lock()

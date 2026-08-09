@@ -3,7 +3,7 @@ from discord import app_commands
 import db
 import usage_db
 from logger import logger
-from state import state
+from state import state, QUOTA_LOCK
 from utils.discord import safe_defer
 from utils.traffic import format_data_size
 from utils.validators import is_valid_mac
@@ -133,8 +133,9 @@ def setup(bot):
                 await warning_msg.edit(view=None)
 
             if action.value == "edit":
-                new_extra_total = usage_db.set_extra_quota(mac_upper, value_gb)
-                new_effective_limit = db.get_effective_daily_limit(mac_upper)
+                async with QUOTA_LOCK:
+                    new_extra_total = usage_db.set_extra_quota(mac_upper, value_gb)
+                    new_effective_limit = db.get_effective_daily_limit(mac_upper)
                 title = "`✏️` Extra Quota Edited"
                 action_line = f"Set To:        {format_data_size(value_gb)}\n"
                 log_verb = "edited (set)"
