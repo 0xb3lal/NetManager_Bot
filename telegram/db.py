@@ -86,3 +86,12 @@ def clear_all_threshold_notifications():
         logger.info("Usage threshold notification flags cleared.")
     except Exception as e:
         logger.error(f"Error clearing threshold notifications: {e}")
+
+def reset_notified_thresholds(mac: str):
+    mac = mac.upper()
+    try:
+        with get_db() as conn:
+            conn.execute("DELETE FROM threshold_notified WHERE mac = ?", (mac,))
+        logger.info(f"Reset usage threshold notification flags for {mac}.")
+    except Exception as e:
+        logger.error(f"Error resetting threshold notifications for {mac}: {e}")

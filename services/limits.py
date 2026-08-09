@@ -2,6 +2,7 @@ import asyncio
 import discord
 import db
 import usage_db
+import telegram.db as telegram_db
 from config import CHANNEL_ID
 from state import state, ROUTER_LOCK
 from services.traffic import get_today_usage_by_mac
@@ -120,6 +121,7 @@ async def add_extra_quota_covering_overage(bot_instance, mac, amount_gb):
     new_extra_total = current_extra + amount_gb + deficit
 
     usage_db.set_extra_quota(mac, new_extra_total)
+    telegram_db.reset_notified_thresholds(mac)
     new_effective_limit = db.get_effective_daily_limit(mac)
 
     await recheck_device_after_limit_change(bot_instance, mac)
