@@ -21,6 +21,8 @@ async def handle_usage_command(chat_id: str, first_name: str = ""):
         )
         return
 
+    await telegram_client.send_chat_action(chat_id, "typing")
+
     usage_by_mac = await asyncio.to_thread(get_today_usage_by_mac)
     usage_gb = usage_by_mac.get(mac, 0)
 
