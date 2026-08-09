@@ -3,7 +3,6 @@ import urllib3
 import requests
 import discord
 from dotenv import load_dotenv
-
 load_dotenv()
 
 REQUIRED_ENV_VARS = (
@@ -19,21 +18,16 @@ if missing_env:
 
 D_USERNAME = os.getenv("D_USERNAME")
 D_PASSWORD = os.getenv("D_PASSWORD")
-
 ROUTER_URL = os.getenv("ROUTER_URL")
 RADIUS_URL = os.getenv("RADIUS_URL")
-
 ROUTER_AUTH = (
     os.getenv("ROUTER_USER"),
     os.getenv("ROUTER_PASS"),
 )
 
 DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
-
 GUILD_ID = discord.Object(id=1475047474832867338)
-
 CHANNEL_ID = int(os.getenv("CHANNEL_ID"))
-
 WIFI_IFACE = os.getenv("WIFI_IFACE", "eth1")
 
 # Telegram bot token and chat ID for notifications

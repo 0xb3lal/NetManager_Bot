@@ -96,7 +96,6 @@ def init_db():
 
     logger.info("Database initialized successfully.")
 
-
 # ========= DEVICES =========
 def get_devices() -> dict:
     with get_db() as conn:

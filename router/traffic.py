@@ -16,15 +16,12 @@ HEADERS = {
     "X-Requested-With": "XMLHttpRequest"
 }
 
-
 def _decode_date(n):
     """Decode Tomato firmware date encoding to (year, month, day)."""
     year  = ((n >> 16) & 0xFF) + 1900
     month = (n >> 8) & 0xFF
     day   = n & 0xFF
-
     return year, month, day
-
 
 def get_speed_history(retries=1, retry_delay=2):
     """Fetch current speed/traffic history from router, with one automatic retry on timeout."""
@@ -75,7 +72,6 @@ def get_speed_history(retries=1, retry_delay=2):
             logger.error(f"Error fetching speed history: {e}")
             return {}
 
-
 def get_daily_history(retries=1, retry_delay=2):
     """Fetch daily traffic history from router (JFFS2), with one automatic retry on timeout."""
 
@@ -118,7 +114,6 @@ def get_daily_history(retries=1, retry_delay=2):
             logger.error(f"Error fetching daily history: {e}")
             return []
 
-
 def get_today_usage(daily_history):
     """Extract today's usage data from daily history."""
     now   = datetime.now(ZoneInfo("Africa/Cairo"))
@@ -139,7 +134,6 @@ def get_today_usage(daily_history):
         result[ip]["rx"] += rx_bytes
         result[ip]["tx"] += tx_bytes
     return result
-
 
 def get_today_combined(speed_history, daily_history):
     """Combine speed history and daily history for comprehensive traffic view."""

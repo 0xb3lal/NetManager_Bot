@@ -1,16 +1,12 @@
 import discord
 from discord import app_commands
-
 import db
 from logger import logger
-
 from state import state
-
 from utils.discord import safe_defer
 from utils.traffic import format_data_size
 from utils.validators import is_valid_mac
 from utils.autocomplete import all_macs_autocomplete
-
 from services.limits import (
     recheck_device_after_limit_change,
     recheck_default_limit_devices,
