@@ -95,3 +95,11 @@ def reset_notified_thresholds(mac: str):
         logger.info(f"Reset usage threshold notification flags for {mac}.")
     except Exception as e:
         logger.error(f"Error resetting threshold notifications for {mac}: {e}")
+
+def get_mac_by_chat_id(chat_id: str) -> str | None:
+    """Reverse lookup: given a Telegram chat_id, find which device it's linked to."""
+    with get_db() as conn:
+        row = conn.execute(
+            "SELECT mac FROM device_telegram WHERE chat_id = ?", (str(chat_id),)
+        ).fetchone()
+    return row["mac"] if row else None

@@ -3,6 +3,7 @@ import discord
 import db
 import usage_db
 import telegram.db as telegram_db
+import telegram.client as telegram_client
 from config import CHANNEL_ID
 from state import state, ROUTER_LOCK
 from services.traffic import get_today_usage_by_mac
@@ -125,5 +126,19 @@ async def add_extra_quota_covering_overage(bot_instance, mac, amount_gb):
     new_effective_limit = db.get_effective_daily_limit(mac)
 
     await recheck_device_after_limit_change(bot_instance, mac)
+
+    chat_id = telegram_db.get_device_chat_id(mac)
+    if chat_id:
+        device_name = state.macs_list.get(mac, mac)
+        text = (
+            "`➕` <b>Extra Quota Added</b>\n"
+            f"<pre>\n"
+            f"{'Device:'.ljust(12)} {device_name}\n"
+            f"{'Added:'.ljust(12)} {format_data_size(amount_gb)}\n"
+            f"{'Extra Today:'.ljust(12)} {format_data_size(new_extra_total)}\n"
+            f"{'New Limit:'.ljust(12)} {format_data_size(new_effective_limit)}\n"
+            f"</pre>"
+        )
+        await telegram_client.send_message(chat_id, text)
 
     return new_extra_total, new_effective_limit
