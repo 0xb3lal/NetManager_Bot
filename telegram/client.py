@@ -84,7 +84,7 @@ async def get_updates(offset: int | None = None, timeout: int = 30) -> list:
             async with session.get(
                 f"{TELEGRAM_API_BASE}/getUpdates",
                 params=params,
-                timeout=aiohttp.ClientTimeout(total=timeout + 10)
+                timeout=aiohttp.ClientTimeout(total=timeout + 20)
             ) as resp:
                 if resp.status != 200:
                     body = await resp.text()
@@ -93,9 +93,8 @@ async def get_updates(offset: int | None = None, timeout: int = 30) -> list:
                 data = await resp.json()
                 return data.get("result", [])
     except Exception as e:
-        logger.error(f"Error polling Telegram updates: {e}")
+        logger.error(f"Error polling Telegram updates: {type(e).__name__}: {e}")
         return []
-
 
 async def set_bot_commands() -> bool:
     """
