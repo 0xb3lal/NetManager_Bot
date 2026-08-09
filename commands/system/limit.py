@@ -32,6 +32,7 @@ def setup(bot):
         app_commands.Choice(name="Main Balance", value="main"),
         app_commands.Choice(name="Daily Default", value="daily_default"),
         app_commands.Choice(name="List", value="list"),
+        app_commands.Choice(name="Reset Custom Limits", value="reset"),
     ])
     @app_commands.choices(unit=[
         app_commands.Choice(name="GB", value="GB"),
@@ -80,6 +81,35 @@ def setup(bot):
                 )
 
                 await interaction.followup.send(embed=embed)
+                return
+
+
+            if scope_value == "reset":
+
+                cleared_count = db.clear_all_device_daily_limits()
+
+                if not cleared_count:
+                    await interaction.followup.send(
+                        "`ℹ️` No custom daily limits to reset."
+                    )
+                    return
+
+                logger.info(
+                    f"User {interaction.user} reset {cleared_count} custom daily limit(s) to default."
+                )
+
+                await interaction.followup.send(
+                    embed=discord.Embed(
+                        title="`⚙️` Custom Limits Reset",
+                        description=(
+                            f"`✅` Cleared {cleared_count} custom daily limit(s). "
+                            f"All devices now use the default ({format_data_size(db.get_daily_default_limit())})."
+                        ),
+                        color=0xf1c40f
+                    )
+                )
+
+                await recheck_default_limit_devices(bot)
                 return
 
 
