@@ -105,11 +105,15 @@ async def recheck_default_limit_devices(bot_instance):
 
 async def add_extra_quota_covering_overage(bot_instance, mac, amount_gb):
     """
-    Add extra quota to a device, guaranteeing the requested amount becomes real,
-    additional usable data — even if the device is currently over its limit
-    (e.g. already blocked). Any existing overage is absorbed first, so the
-    device always ends up with exactly `amount_gb` of new headroom.
-    Returns (new_extra_total, new_effective_limit).
+    Add extra quota to a device, always granting the requested amount as
+    fresh headroom on top of the device's actual current usage (not on top
+    of the base limit, and not piled on top of any stale extra from a
+    previous add/edit). Works whether the device is currently under its
+    limit or already over it (e.g. blocked).
+
+    new_effective_limit = max(base_limit, usage_now) + amount_gb
+
+    Returns (new_extra_total, new_effective_limit, usage_gb).
     """
     async with ROUTER_LOCK:
         usage_by_mac = await asyncio.to_thread(get_today_usage_by_mac)
@@ -117,16 +121,16 @@ async def add_extra_quota_covering_overage(bot_instance, mac, amount_gb):
     usage_gb = usage_by_mac.get(mac, 0)
 
     async with QUOTA_LOCK:
-        current_effective_limit = db.get_effective_daily_limit(mac)
-        current_extra = usage_db.get_extra_quota(mac)
+        base_limit = db.get_device_daily_limit(mac)
+        if base_limit is None:
+            base_limit = db.get_daily_default_limit()
 
-        deficit = max(usage_gb - current_effective_limit, 0)
-        new_extra_total = current_extra + amount_gb + deficit
+        new_effective_limit = max(base_limit, usage_gb) + amount_gb
+        new_extra_total = new_effective_limit - base_limit
 
         usage_db.set_extra_quota(mac, new_extra_total)
 
     telegram_db.reset_notified_thresholds(mac)
-    new_effective_limit = db.get_effective_daily_limit(mac)
 
     await recheck_device_after_limit_change(bot_instance, mac)
 
@@ -137,6 +141,7 @@ async def add_extra_quota_covering_overage(bot_instance, mac, amount_gb):
             "`➕` <b>Extra Quota Added</b>\n"
             f"<pre>\n"
             f"{'Device:'.ljust(12)} {device_name}\n"
+            f"{'Usage Now:'.ljust(12)} {format_data_size(usage_gb)}\n"
             f"{'Added:'.ljust(12)} {format_data_size(amount_gb)}\n"
             f"{'Extra Today:'.ljust(12)} {format_data_size(new_extra_total)}\n"
             f"{'New Limit:'.ljust(12)} {format_data_size(new_effective_limit)}\n"
@@ -144,4 +149,4 @@ async def add_extra_quota_covering_overage(bot_instance, mac, amount_gb):
         )
         await telegram_client.send_message(chat_id, text)
 
-    return new_extra_total, new_effective_limit
+    return new_extra_total, new_effective_limit, usage_gb

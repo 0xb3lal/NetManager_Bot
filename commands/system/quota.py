@@ -137,17 +137,20 @@ def setup(bot):
                     new_extra_total = usage_db.set_extra_quota(mac_upper, value_gb)
                     new_effective_limit = db.get_effective_daily_limit(mac_upper)
                 title = "`✏️` Extra Quota Edited"
-                action_line = f"Set To:        {format_data_size(value_gb)}\n"
+                extra_lines = f"Set To:        {format_data_size(value_gb)}\n"
                 log_verb = "edited (set)"
 
                 await recheck_device_after_limit_change(bot, mac_upper)
 
             else:  # add
-                new_extra_total, new_effective_limit = await add_extra_quota_covering_overage(
+                new_extra_total, new_effective_limit, usage_gb = await add_extra_quota_covering_overage(
                     bot, mac_upper, value_gb
                 )
                 title = "`➕` Extra Quota Added"
-                action_line = f"Added:         {format_data_size(value_gb)}\n"
+                extra_lines = (
+                    f"Usage Now:     {format_data_size(usage_gb)}\n"
+                    f"Added:         {format_data_size(value_gb)}\n"
+                )
                 log_verb = "added"
 
             logger.info(
@@ -161,7 +164,7 @@ def setup(bot):
                     description=(
                         f"```\n"
                         f"Device:        {state.macs_list.get(mac_upper, mac_upper)}\n"
-                        f"{action_line}"
+                        f"{extra_lines}"
                         f"Extra Today:   {format_data_size(new_extra_total)}\n"
                         f"New Effective: {format_data_size(new_effective_limit)}\n"
                         f"```"
