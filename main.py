@@ -13,6 +13,7 @@ from router.firewall import _reapply_firewall_state
 from commands.register import setup
 import usage_db
 import telegram.db as telegram_db
+import telegram.discord_bridge as discord_bridge
 from telegram.polling import initialize_telegram_bot, start_telegram_polling
 from config import (
     DISCORD_TOKEN,
@@ -82,6 +83,7 @@ class MyBot(discord.Client):
         # Independent of Discord Gateway state, so setup_hook (called once
         # per process before on_ready) is the right place — no need to
         # wait for guild/cache readiness like on_ready-dependent logic.
+        discord_bridge.set_bot_instance(self)
         await initialize_telegram_bot()
         start_telegram_polling()
 

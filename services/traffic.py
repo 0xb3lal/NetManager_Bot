@@ -15,6 +15,7 @@ from services.radius import fetch_radius_traffic
 from utils.traffic import (
     bytes_to_mb,
     parse_traffic_to_gb,
+    format_data_size,
 )
 
 def get_today_usage_by_mac():
@@ -69,7 +70,7 @@ async def async_check_and_lock(bot_instance):
         status_box = (
             f"```\n"
             f"{balance_label} {available_traffic}\n"
-            f"{limit_label} {state.threshold} GB\n"
+            f"{limit_label} {format_data_size(state.threshold)}\n"
             f"```"
         )
 

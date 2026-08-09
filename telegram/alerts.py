@@ -5,9 +5,10 @@ from utils.traffic import format_data_size
 import telegram.db as telegram_db
 import telegram.client as telegram_client
 
-USAGE_NOTIFY_THRESHOLDS = (50, 75, 100)
+USAGE_NOTIFY_THRESHOLDS = (25, 50, 75, 100)
 
 _THRESHOLD_STYLE = {
+    25:  ("🔵", "Usage Update"),
     50:  ("📶", "Usage Alert"),
     75:  ("⚠️", "Usage Alert"),
     100: ("🚫", "Limit Reached"),
@@ -47,6 +48,7 @@ async def check_and_send_threshold_alerts(mac: str, device_name: str, usage_gb: 
 
 
 def _build_alert_text(mac: str, device_name: str, usage_gb: float, effective_limit: float, threshold: int) -> str:
+    """Simple, easy-to-read alert — same plain style as the /usage command."""
     remaining_gb = max(effective_limit - usage_gb, 0)
     icon, header = _THRESHOLD_STYLE.get(threshold, ("📶", "Usage Alert"))
 
@@ -55,14 +57,13 @@ def _build_alert_text(mac: str, device_name: str, usage_gb: float, effective_lim
 
     lines = [
         f"{'Device:'.ljust(11)} {device_name}",
-        f"{'Threshold:'.ljust(11)} {threshold}%",
-        f"{'Usage:'.ljust(11)} {format_data_size(usage_gb)}",
+        f"{'Used:'.ljust(11)} {format_data_size(usage_gb)}",
         f"{'Limit:'.ljust(11)} {format_data_size(effective_limit)}",
         f"{'Remaining:'.ljust(11)} {format_data_size(remaining_gb)}",
     ]
 
     body = (
-        f"{icon} <b>{header}</b>\n"
+        f"{icon} <b>{header} — {threshold}%</b>\n"
         f"<pre>" + "\n".join(lines) + "</pre>"
     )
 

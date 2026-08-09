@@ -1,5 +1,7 @@
 from logger import logger
 
+import telegram.db as telegram_db
+from telegram.discord_bridge import notify_admin_new_telegram_user
 from telegram.commands.register import COMMAND_HANDLERS
 
 # Import every command module so its @command(...) decorator runs and
@@ -9,6 +11,10 @@ from telegram.commands.register import COMMAND_HANDLERS
 import telegram.commands.usage
 import telegram.commands.start
 
+# In-memory guard so a not-yet-linked chat doesn't spam the admin channel
+# on every message — one notification per chat per process run is enough.
+_already_notified_unlinked = set()
+
 
 async def handle_update(update: dict):
     """Route a single incoming Telegram update to the right command handler."""
@@ -17,35 +23,30 @@ async def handle_update(update: dict):
         return
 
     chat_id = str(message["chat"]["id"])
-    first_name = message.get("from", {}).get("first_name", "")
+    sender = message.get("from", {})
+    first_name = sender.get("first_name", "")
     text = message["text"].strip()
     if not text:
         return
+
+    # New, unlinked user reaching out — let the admin know on Discord so
+    # they can /tglink this chat to a device.
+    mac = telegram_db.get_mac_by_chat_id(chat_id)
+    if not mac and chat_id not in _already_notified_unlinked:
+        _already_notified_unlinked.add(chat_id)
+        await notify_admin_new_telegram_user(chat_id, first_name)
 
     command_name = text.split()[0].split("@")[0]  # strip "@BotName" if present
     handler = COMMAND_HANDLERS.get(command_name)
 
+    logger.info(
+        f"Telegram command received: {command_name} from chat_id={chat_id} "
+        f"first_name={first_name!r}"
+    )
+
     if handler:
         await handler(chat_id, first_name)
-    # Unknown commands are ignored on purpose — no need to spam replies
-    # for random messages sent to the bot.
-
-
-async def handle_update(update: dict):
-    """Route a single incoming Telegram update to the right command handler."""
-    message = update.get("message")
-    if not message or "text" not in message:
-        return
-
-    chat_id = str(message["chat"]["id"])
-    text = message["text"].strip()
-    if not text:
-        return
-
-    command = text.split()[0].split("@")[0]  # strip "@BotName" if present
-    handler = COMMAND_HANDLERS.get(command)
-
-    if handler:
-        await handler(chat_id)
-    # Unknown commands are ignored on purpose — no need to spam replies
-    # for random messages sent to the bot.
+    else:
+        logger.info(f"No handler registered for Telegram command: {command_name}")
+        # Unknown commands are otherwise ignored on purpose — no need to
+        # spam replies for random messages sent to the bot.

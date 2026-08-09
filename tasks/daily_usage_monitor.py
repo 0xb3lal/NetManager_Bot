@@ -8,8 +8,7 @@ from config import CHANNEL_ID
 from router.firewall import enable_lockdown
 from services.traffic import get_today_usage_by_mac
 from utils.traffic import format_data_size
-from services.usage_alerts import check_and_send_threshold_alerts
-
+from telegram.alerts import check_and_send_threshold_alerts
 
 def setup_daily_usage_monitor_task(bot):
     """Create and configure the daily usage monitor task."""
@@ -49,7 +48,7 @@ async def _run_daily_usage_monitor_check(bot):
 
             device_name = state.macs_list.get(mac, mac)
 
-            # --- Telegram threshold alerts (50% / 75% / 100%) ---
+            # --- Telegram threshold alerts (25% / 50% / 75% / 100%) ---
             await check_and_send_threshold_alerts(
                 mac, device_name, usage_gb, effective_limit
             )
