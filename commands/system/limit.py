@@ -221,7 +221,7 @@ def setup(bot):
                     title="`⚙️` System Configuration Update",
                     description=(
                         f"```\n"
-                        f"Old Limit: {format_data_size(old_limit)} GB\n"
+                        f"Old Limit: {format_data_size(old_limit)}\n"
                         f"New Limit: {state.threshold} GB\n"
                         f"```"
                     ),
