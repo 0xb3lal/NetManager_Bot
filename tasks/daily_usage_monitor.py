@@ -3,12 +3,13 @@ import discord
 import db
 from discord.ext import tasks
 from logger import logger
-from state import ROUTER_LOCK, state
+from state import ROUTER_LOCK, state, acquire_router_lock_bounded
 from config import CHANNEL_ID
 from router.firewall import enable_lockdown
 from services.traffic import get_today_usage_by_mac
 from utils.traffic import format_data_size
 from telegram.alerts import check_and_send_threshold_alerts
+
 
 def setup_daily_usage_monitor_task(bot):
     """Create and configure the daily usage monitor task."""
@@ -16,12 +17,8 @@ def setup_daily_usage_monitor_task(bot):
     @tasks.loop(minutes=10.0)
     async def daily_usage_monitor_task():
         """Monitor daily usage and auto-block devices exceeding limits."""
-        if ROUTER_LOCK.locked():
-            logger.debug("Daily usage monitor skipped (router busy with another task).")
-            return
         logger.info("Daily usage monitor task TRIGGERED — starting scheduled check...")
-        async with ROUTER_LOCK:
-            await _run_daily_usage_monitor_check(bot)
+        await _run_daily_usage_monitor_check(bot)
 
     @daily_usage_monitor_task.before_loop
     async def before_daily_usage_monitor():
@@ -35,13 +32,26 @@ def setup_daily_usage_monitor_task(bot):
 
 async def _run_daily_usage_monitor_check(bot):
     """Check device usage and enforce daily limits."""
+    # --- Phase 1: router I/O only, under the lock ---
+    if not await acquire_router_lock_bounded("Daily usage monitor"):
+        return
     try:
         usage_by_mac = await asyncio.to_thread(get_today_usage_by_mac)
-        channel = bot.get_channel(CHANNEL_ID)
+    except Exception as e:
+        logger.error(f"Error fetching usage snapshot in daily usage monitor: {e}")
+        return
+    finally:
+        ROUTER_LOCK.release()
 
+    try:
+        channel = bot.get_channel(CHANNEL_ID)
         devices_to_ban = []
 
+        # --- Phase 2 (no lock): Telegram alerts + classification ---
         for mac, usage_gb in usage_by_mac.items():
+            if db.is_exempt_from_daily_limit(mac):
+                continue
+
             effective_limit = db.get_effective_daily_limit(mac)
             if effective_limit <= 0:
                 continue
@@ -81,14 +91,24 @@ async def _run_daily_usage_monitor_check(bot):
 
             devices_to_ban.append((mac, device_name, usage_gb, effective_limit))
 
+        # --- Phase 3 (short lock): re-verify, then apply bans atomically ---
         if devices_to_ban:
-            for mac, _, _, _ in devices_to_ban:
-                state.banned_macs.add(mac)
-                db.ban_device(mac, reason="daily_limit")
+            async with ROUTER_LOCK:
+                ban_now = [
+                    entry for entry in devices_to_ban
+                    if entry[0] not in state.banned_macs
+                    and entry[0] not in state.allowed_macs
+                    and db.device_exists(entry[0])
+                ]
+                for mac, _, _, _ in ban_now:
+                    state.banned_macs.add(mac)
+                    db.ban_device(mac, reason="daily_limit")
 
-            await asyncio.to_thread(enable_lockdown, force_lock=state.lockdown_state)
+                if ban_now:
+                    await asyncio.to_thread(enable_lockdown, force_lock=state.lockdown_state)
 
-            for mac, device_name, usage_gb, effective_limit in devices_to_ban:
+            # --- Phase 4 (no lock): Discord notifications ---
+            for mac, device_name, usage_gb, effective_limit in ban_now:
                 logger.info(f"Auto-blocked {mac} for exceeding daily limit ({usage_gb:.2f}GB / {effective_limit:.2f}GB).")
                 if channel:
                     status_box = (

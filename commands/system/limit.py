@@ -122,6 +122,9 @@ def setup(bot):
 
             value_gb = value / 1024 if unit_value == "MB" else value
 
+            if value_gb <= 0:
+                await interaction.followup.send("`❌` Value must be greater than zero.")
+                return
 
             if mac:
 

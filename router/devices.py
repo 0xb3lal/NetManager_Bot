@@ -1,15 +1,15 @@
 import re
-import discord
+import asyncio
 
 import db
 
 from logger import logger
 from state import state
+from services.onboarding import start_onboarding
 
 from config import (
     ROUTER_URL,
     ROUTER_SESSION,
-    CHANNEL_ID,
 )
 
 import demjson3
@@ -33,11 +33,13 @@ def fetch_devlist():
     wireless_devs = demjson3.decode(wldev_match.group(1))
     arp_list      = demjson3.decode(arp_match.group(1))
     
+    seen_macs = []
     for lease in dhcp_leases:
         ip = lease[1]
         mac = lease[2].upper()
         if not ip or not mac:
             continue
+        seen_macs.append(mac)
         old_mac = state.ip_to_mac_cache.get(ip)
         if old_mac and old_mac != mac:
             old_name = state.macs_list.get(old_mac, old_mac)
@@ -47,30 +49,39 @@ def fetch_devlist():
                 f"to {new_name} ({mac}) — daily usage may be inaccurate."
             )
         state.ip_to_mac_cache[ip] = mac
+
+    # Presence comes exclusively from the router: every MAC in this poll
+    # counts as "seen right now" for stale-device cleanup.
+    db.refresh_last_seen(seen_macs)
+
     return dhcp_leases, wireless_devs, arp_list
 
 
 def fetch_devlist_and_discover(bot_instance):
-    """Fetch devlist and notify about new devices."""
+    """Fetch devlist, discover new devices, and start their onboarding flow."""
     dhcp_leases, wireless_devs, arp_list = fetch_devlist()
     new_devices = []
     for lease in dhcp_leases:
         mac      = lease[2].upper()
         hostname = lease[0].strip() or "Unknown"
+        ip       = lease[1]
         if db.add_device(mac, hostname):
+            new_devices.append((mac, hostname, ip))
+        if state.macs_list.get(mac) != hostname:
             state.macs_list[mac] = hostname
-            new_devices.append((mac, hostname))
     if new_devices and bot_instance.loop.is_running():
-        async def _notify():
-            channel = bot_instance.get_channel(CHANNEL_ID)
-            if not channel:
-                return
-            for mac, hostname in new_devices:
-                embed = discord.Embed(
-                    title="` 🆕` New Device Discovered",
-                    description=f"**Hostname:** `{hostname}`\n**MAC:** `{mac}`",
-                    color=0xf39c12
-                )
-                await channel.send(embed=embed)
-        bot_instance.loop.create_task(_notify())
+        async def _onboard_new_devices():
+            # New devices are inserted as PENDING (firewall-dropped) by
+            # add_device; this kicks off the interactive review session.
+            for mac, hostname, ip in new_devices:
+                await start_onboarding(bot_instance, mac, hostname, ip)
+
+        future = asyncio.run_coroutine_threadsafe(_onboard_new_devices(), bot_instance.loop)
+
+        def _log_onboard_failure(fut):
+            exc = fut.exception()
+            if exc:
+                logger.error(f"Failed to start onboarding for new devices: {exc}")
+
+        future.add_done_callback(_log_onboard_failure)
     return dhcp_leases, wireless_devs, arp_list

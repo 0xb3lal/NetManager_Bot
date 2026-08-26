@@ -27,8 +27,9 @@ def get_extra_quota(mac: str) -> float:
         return 0.0
 
 
-def add_extra_quota(mac: str, amount_gb: float) -> float:
-    """Add (or subtract) to a device's extra quota for today. Returns new total extra."""
+def add_extra_quota(mac: str, amount_gb: float) -> float | None:
+    """Add (or subtract) to a device's extra quota for today.
+    Returns the new total extra, or None when the write failed."""
     mac = mac.upper()
     try:
         with get_db() as conn:
@@ -45,10 +46,11 @@ def add_extra_quota(mac: str, amount_gb: float) -> float:
         return new_total
     except Exception as e:
         logger.error(f"Error updating extra quota for {mac}: {e}")
-        return 0.0
+        return None
 
-def set_extra_quota(mac: str, amount_gb: float) -> float:
-    """Overwrite a device's extra quota for today with an absolute value. Returns the new value."""
+def set_extra_quota(mac: str, amount_gb: float) -> float | None:
+    """Overwrite a device's extra quota for today with an absolute value.
+    Returns the new value, or None when the write failed."""
     mac = mac.upper()
     try:
         with get_db() as conn:
@@ -60,7 +62,7 @@ def set_extra_quota(mac: str, amount_gb: float) -> float:
         return amount_gb
     except Exception as e:
         logger.error(f"Error setting extra quota for {mac}: {e}")
-        return 0.0
+        return None
     
 
 def clear_all_extra_quota() -> int:

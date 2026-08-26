@@ -17,6 +17,7 @@ change is visible from every other file that imported the same instance.
 
 import asyncio
 import db
+from logger import logger
 
 class BotState:
     """Holds all bot-wide mutable state."""
@@ -26,6 +27,7 @@ class BotState:
         self.banned_macs     = set()
         self.macs_list       = {}
         self.allowed_macs    = []
+        self.pending_macs    = set()   # MACs still awaiting onboarding (firewall-dropped)
         self.lockdown_state  = False
         self.ip_to_mac_cache = {}
 
@@ -38,6 +40,7 @@ class BotState:
         self.banned_macs     = db.get_banned()
         self.macs_list       = db.get_devices()
         self.allowed_macs    = db.get_allowed()
+        self.pending_macs    = set(db.get_pending_devices())
         self.threshold       = db.get_threshold()
         self.lockdown_state  = db.get_lockdown_state()
         self.ip_to_mac_cache = {}
@@ -57,3 +60,24 @@ ROUTER_LOCK = asyncio.Lock()
 # the other. Always hold this around any get_extra_quota() + set_extra_quota()
 # pair that depends on the value just read.
 QUOTA_LOCK = asyncio.Lock()
+
+ROUTER_LOCK_WAIT_TIMEOUT = 30
+
+
+async def acquire_router_lock_bounded(caller: str) -> bool:
+    """Wait up to ROUTER_LOCK_WAIT_TIMEOUT seconds for ROUTER_LOCK.
+
+    Returns True if the lock was acquired (caller MUST release it),
+    False if the wait timed out and the caller should skip this cycle.
+    """
+    try:
+        await asyncio.wait_for(ROUTER_LOCK.acquire(), timeout=ROUTER_LOCK_WAIT_TIMEOUT)
+        return True
+    except asyncio.TimeoutError:
+        logger.warning(
+            f"{caller} skipped this cycle: the router lock stayed busy for "
+            f"longer than the {ROUTER_LOCK_WAIT_TIMEOUT}s wait cap (expected occasional "
+            f"contention with device discovery / reporting / manual commands), so this "
+            f"check was aborted instead of blocking. It will retry on the next cycle."
+        )
+        return False

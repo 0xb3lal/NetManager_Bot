@@ -9,7 +9,9 @@ from tasks.device_discovery import setup_device_discovery_task
 from tasks.daily_usage_monitor import setup_daily_usage_monitor_task
 from tasks.daily_report import setup_daily_network_report_task
 from tasks.midnight_reset import setup_midnight_reset_task
-from router.firewall import _reapply_firewall_state
+from tasks.anomaly_check import setup_anomaly_check_task
+from tasks.stale_cleanup import setup_stale_cleanup_task
+from router.firewall import reapply_firewall_state
 from commands.register import setup
 import usage_db
 import telegram.db as telegram_db
@@ -79,6 +81,14 @@ class MyBot(discord.Client):
         if not midnight_reset_task.is_running():
             midnight_reset_task.start()
 
+        anomaly_check_task = setup_anomaly_check_task(self)
+        if not anomaly_check_task.is_running():
+            anomaly_check_task.start()
+
+        stale_cleanup_task = setup_stale_cleanup_task(self)
+        if not stale_cleanup_task.is_running():
+            stale_cleanup_task.start()
+
         # Telegram command menu + incoming-message polling.
         # Independent of Discord Gateway state, so setup_hook (called once
         # per process before on_ready) is the right place — no need to
@@ -110,7 +120,7 @@ class MyBot(discord.Client):
         )
 
         async with ROUTER_LOCK:
-            await asyncio.to_thread(_reapply_firewall_state)
+            await asyncio.to_thread(reapply_firewall_state)
 
 # MAIN ENTRY POINT
 
@@ -150,9 +160,6 @@ async def main():
             await asyncio.sleep(retry_delay)
             retry_delay = min(retry_delay * 2, max_retry_delay)
             continue
-
-        retry_delay = 5
-        attempt = 0
 
 if __name__ == "__main__":
     logger.info("--- Starting NetManager Bot ---")

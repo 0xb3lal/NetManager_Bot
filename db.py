@@ -1,25 +1,22 @@
 import sqlite3
 import logging
 from contextlib import contextmanager
+from datetime import datetime, timezone
 
 logger = logging.getLogger(__name__)
 
 DB_FILE = "netmanager.db"
 
-SEED_DEVICES = [
-    ("D2:C5:E2:DE:F5:B4", "Baba",     0),
-    ("5A:CE:CB:B5:D4:C9", "Ziad",     0),
-    ("F8:34:41:DA:93:EB", "Windows",  1),
-    ("22:9F:AE:3B:5D:C4", "Mama",     0),
-    ("4C:20:B8:87:12:E2", "Iphone",   1),
-    ("F2:72:C9:B8:4B:C7", "Tablet",   0),
-    ("32:AC:87:47:17:5D", "Fedora",   1),
-    ("D6:62:9E:2B:31:3D", "Yousef",   0),
-    ("A8:6A:86:FE:B7:80", "Redmi-A3", 0),
-]
+# NOTE: devices are sourced exclusively from the router via discovery.
+# The old static SEED_DEVICES bootstrap list was removed on purpose —
+# no manual/hardcoded device entries exist anywhere anymore.
 
 # Default daily-per-device usage cap (GB), used when a device has no custom override.
 DEFAULT_DAILY_LIMIT_GB = 1.5
+
+
+def _now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
 
 @contextmanager
 def get_db():
@@ -77,11 +74,27 @@ def init_db():
             )
             logger.info("Migrated 'banned' table: added 'reason' column.")
 
-        for mac, hostname, allowed in SEED_DEVICES:
+        # ---- Migrations: device onboarding / exemption / anomaly / last_seen ----
+        # Existing rows are grandfathered as 'confirmed' via the column default,
+        # so only devices discovered AFTER this migration go through onboarding.
+        if not _column_exists(conn, "devices", "onboard_status"):
             conn.execute(
-                "INSERT OR IGNORE INTO devices (mac, hostname, allowed) VALUES (?, ?, ?)",
-                (mac, hostname, allowed)
+                "ALTER TABLE devices ADD COLUMN onboard_status TEXT NOT NULL DEFAULT 'confirmed'"
             )
+            logger.info("Migrated 'devices' table: added 'onboard_status' column.")
+        if not _column_exists(conn, "devices", "exempt_daily_limit"):
+            conn.execute(
+                "ALTER TABLE devices ADD COLUMN exempt_daily_limit INTEGER NOT NULL DEFAULT 0"
+            )
+            logger.info("Migrated 'devices' table: added 'exempt_daily_limit' column.")
+        if not _column_exists(conn, "devices", "anomaly_handled"):
+            conn.execute(
+                "ALTER TABLE devices ADD COLUMN anomaly_handled INTEGER NOT NULL DEFAULT 0"
+            )
+            logger.info("Migrated 'devices' table: added 'anomaly_handled' column.")
+        if not _column_exists(conn, "devices", "last_seen"):
+            conn.execute("ALTER TABLE devices ADD COLUMN last_seen TEXT")
+            logger.info("Migrated 'devices' table: added 'last_seen' column.")
 
         conn.execute(
             "INSERT OR IGNORE INTO settings (key, value) VALUES ('threshold', '3.0')"
@@ -122,22 +135,179 @@ def set_device_allowed(mac: str, allowed: bool) -> bool:
         return False
 
 def add_device(mac: str, hostname: str) -> bool:
+    """Insert a newly discovered device, or refresh its stored hostname if the
+    router reports a new one for a known MAC. Other fields (allowed status,
+    limits, quotas, onboarding status) are never touched by a hostname refresh.
+
+    New rows start as onboard_status='pending' (blocked until reviewed) and
+    get their first last_seen stamp. Presence refreshes afterwards are handled
+    by fetch_devlist(), not here.
+
+    Returns True only when a brand-new device row was inserted.
+    """
     mac = mac.upper()
     hostname = hostname.strip() or "Unknown"
     try:
         with get_db() as conn:
-            conn.execute(
-                "INSERT OR IGNORE INTO devices (mac, hostname, allowed) VALUES (?, ?, 0)",
-                (mac, hostname)
-            )
-            inserted = conn.execute(
-                "SELECT changes() as c"
-            ).fetchone()["c"]
-        if inserted:
-            logger.info(f"New device discovered and saved: {mac} ({hostname})")
-        return bool(inserted)
+            row = conn.execute(
+                "SELECT hostname FROM devices WHERE mac = ?", (mac,)
+            ).fetchone()
+            if row is None:
+                conn.execute(
+                    "INSERT INTO devices "
+                    "(mac, hostname, allowed, onboard_status, exempt_daily_limit, anomaly_handled, last_seen) "
+                    "VALUES (?, ?, 0, 'pending', 0, 0, ?)",
+                    (mac, hostname, _now_iso())
+                )
+                logger.info(f"New device discovered and saved as PENDING: {mac} ({hostname})")
+                return True
+            if row["hostname"] != hostname:
+                conn.execute(
+                    "UPDATE devices SET hostname = ? WHERE mac = ?",
+                    (hostname, mac)
+                )
+                logger.info(
+                    f"Hostname updated for {mac}: '{row['hostname']}' -> '{hostname}'"
+                )
+        return False
     except Exception as e:
         logger.error(f"Error adding device {mac}: {e}")
+        return False
+
+
+def refresh_last_seen(macs) -> None:
+    """Stamp last_seen=now for every given MAC that exists in the table.
+    Called from router polls — presence comes exclusively from the router."""
+    macs = list({m.upper() for m in macs})
+    if not macs:
+        return
+    try:
+        with get_db() as conn:
+            conn.executemany(
+                "UPDATE devices SET last_seen = ? WHERE mac = ?",
+                [(_now_iso(), m) for m in macs]
+            )
+    except Exception as e:
+        logger.error(f"Error refreshing last_seen stamps: {e}")
+
+
+def device_exists(mac: str) -> bool:
+    mac = mac.upper()
+    with get_db() as conn:
+        row = conn.execute("SELECT 1 FROM devices WHERE mac = ?", (mac,)).fetchone()
+    return row is not None
+
+
+def is_onboarding_pending(mac: str) -> bool:
+    mac = mac.upper()
+    with get_db() as conn:
+        row = conn.execute(
+            "SELECT onboard_status FROM devices WHERE mac = ?", (mac,)
+        ).fetchone()
+    return bool(row) and row["onboard_status"] == "pending"
+
+
+def set_onboarding_confirmed(mac: str):
+    mac = mac.upper()
+    try:
+        with get_db() as conn:
+            conn.execute(
+                "UPDATE devices SET onboard_status = 'confirmed' WHERE mac = ?",
+                (mac,)
+            )
+        logger.info(f"Onboarding confirmed for {mac}.")
+    except Exception as e:
+        logger.error(f"Error confirming onboarding for {mac}: {e}")
+
+
+def get_pending_devices() -> dict:
+    """Return {mac: hostname} for every device still awaiting onboarding."""
+    with get_db() as conn:
+        rows = conn.execute(
+            "SELECT mac, hostname FROM devices WHERE onboard_status = 'pending'"
+        ).fetchall()
+    return {row["mac"]: row["hostname"] for row in rows}
+
+
+def get_devices_with_last_seen() -> dict:
+    """Return {mac: row} for devices that have a last_seen stamp.
+    Rows carry mac / hostname / last_seen (sqlite3.Row)."""
+    with get_db() as conn:
+        rows = conn.execute(
+            "SELECT mac, hostname, last_seen FROM devices WHERE last_seen IS NOT NULL"
+        ).fetchall()
+    return {row["mac"]: row for row in rows}
+
+
+def get_last_seen(mac: str) -> str | None:
+    mac = mac.upper()
+    with get_db() as conn:
+        row = conn.execute(
+            "SELECT last_seen FROM devices WHERE mac = ?", (mac,)
+        ).fetchone()
+    return row["last_seen"] if row else None
+
+
+def is_exempt_from_daily_limit(mac: str) -> bool:
+    mac = mac.upper()
+    with get_db() as conn:
+        row = conn.execute(
+            "SELECT exempt_daily_limit FROM devices WHERE mac = ?", (mac,)
+        ).fetchone()
+    return bool(row) and bool(row["exempt_daily_limit"])
+
+
+def set_exempt_from_daily_limit(mac: str, exempt: bool):
+    mac = mac.upper()
+    try:
+        with get_db() as conn:
+            conn.execute(
+                "UPDATE devices SET exempt_daily_limit = ? WHERE mac = ?",
+                (1 if exempt else 0, mac)
+            )
+        logger.info(f"Daily-limit exemption for {mac} set to {exempt}.")
+    except Exception as e:
+        logger.error(f"Error setting daily-limit exemption for {mac}: {e}")
+
+
+def is_anomaly_handled(mac: str) -> bool:
+    mac = mac.upper()
+    with get_db() as conn:
+        row = conn.execute(
+            "SELECT anomaly_handled FROM devices WHERE mac = ?", (mac,)
+        ).fetchone()
+    return bool(row) and bool(row["anomaly_handled"])
+
+
+def mark_anomaly_handled(mac: str):
+    mac = mac.upper()
+    try:
+        with get_db() as conn:
+            conn.execute(
+                "UPDATE devices SET anomaly_handled = 1 WHERE mac = ?", (mac,)
+            )
+    except Exception as e:
+        logger.error(f"Error marking anomaly handled for {mac}: {e}")
+
+
+def delete_device_purge(mac: str) -> bool:
+    """Delete a device and every MAC-keyed satellite row so no ghost state
+    survives the purge. Returns True when a devices row was removed."""
+    mac = mac.upper()
+    try:
+        with get_db() as conn:
+            conn.execute("DELETE FROM devices WHERE mac = ?", (mac,))
+            deleted = conn.execute("SELECT changes() as c").fetchone()["c"]
+            # Satellite tables keyed by MAC — cleaned regardless of whether
+            # the devices row existed, to avoid resurrecting ghosts.
+            for table in (
+                "banned", "daily_limits", "extra_quota",
+                "daily_notified", "device_telegram", "threshold_notified",
+            ):
+                conn.execute(f"DELETE FROM {table} WHERE mac = ?", (mac,))
+        return bool(deleted)
+    except Exception as e:
+        logger.error(f"Error purging stale device {mac}: {e}")
         return False
 
 def get_hostname(mac: str) -> str:
@@ -174,12 +344,23 @@ def ban_device(mac: str, reason: str = "manual") -> bool:
     hostname = get_hostname(mac)
     try:
         with get_db() as conn:
-            conn.execute(
-                "INSERT OR IGNORE INTO banned (mac, hostname, reason) VALUES (?, ?, ?)",
-                (mac, hostname, reason)
-            )
-            inserted = conn.execute("SELECT changes() as c").fetchone()["c"]
-        return bool(inserted)
+            row = conn.execute(
+                "SELECT reason FROM banned WHERE mac = ?", (mac,)
+            ).fetchone()
+            if row is None:
+                conn.execute(
+                    "INSERT INTO banned (mac, hostname, reason) VALUES (?, ?, ?)",
+                    (mac, hostname, reason)
+                )
+                return True
+            # Already banned: a manual block must overwrite an automatic one,
+            # otherwise midnight reset would unban a manually blocked device.
+            if row["reason"] != reason:
+                conn.execute(
+                    "UPDATE banned SET reason = ? WHERE mac = ?", (reason, mac)
+                )
+                return True
+            return False
     except Exception as e:
         logger.error(f"Error banning device {mac}: {e}")
         return False

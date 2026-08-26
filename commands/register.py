@@ -6,6 +6,7 @@ from .moderation import (
     macs,
     banned_list,
     purge,
+    pending,
     wl
 )
 
@@ -21,7 +22,8 @@ from .system import (
     quota,
     reboot,
     tglink,
-    device
+    device,
+    rename
 )
 
 def setup(bot):
@@ -36,8 +38,10 @@ def setup(bot):
     netstat.setup(bot)
     limit.setup(bot)
     purge.setup(bot)
+    pending.setup(bot)
     reboot.setup(bot)
     wl.setup(bot)
     quota.setup(bot)
     tglink.setup(bot)
     device.setup(bot)
+    rename.setup(bot)

@@ -113,7 +113,8 @@ async def add_extra_quota_covering_overage(bot_instance, mac, amount_gb):
 
     new_effective_limit = max(base_limit, usage_now) + amount_gb
 
-    Returns (new_extra_total, new_effective_limit, usage_gb).
+    Returns (new_extra_total, new_effective_limit, usage_gb),
+    or None when the quota write failed.
     """
     async with ROUTER_LOCK:
         usage_by_mac = await asyncio.to_thread(get_today_usage_by_mac)
@@ -127,8 +128,11 @@ async def add_extra_quota_covering_overage(bot_instance, mac, amount_gb):
 
         new_effective_limit = max(base_limit, usage_gb) + amount_gb
         new_extra_total = new_effective_limit - base_limit
+        stored = usage_db.set_extra_quota(mac, new_extra_total)
 
-        usage_db.set_extra_quota(mac, new_extra_total)
+    if stored is None:
+        # DB write failed — do not report success or notify anyone.
+        return None
 
     telegram_db.reset_notified_thresholds(mac)
 

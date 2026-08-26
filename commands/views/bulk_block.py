@@ -17,6 +17,17 @@ class BulkBlockSelect(discord.ui.Select):
             options=options
         )
 
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        # The invoking /blkall was admin-gated, but the posted menu itself is
+        # clickable by anyone who can see it — enforce here too.
+        user = interaction.user
+        if isinstance(user, discord.Member) and user.guild_permissions.administrator:
+            return True
+        await interaction.response.send_message(
+            "`❌` Only administrators can use this.", ephemeral=True
+        )
+        return False
+
     async def callback(self, interaction: discord.Interaction):
         try:
             await interaction.response.defer()

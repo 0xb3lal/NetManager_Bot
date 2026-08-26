@@ -19,7 +19,7 @@ from radius.auth import (
 
 from utils.traffic import parse_traffic_to_gb, format_data_size
 
-RADIUS_SESSION = requests.Session()
+RADIUS_LOGIN_TIMEOUT = 30
 
 
 def fetch_radius_traffic(verbose=False):
@@ -45,24 +45,29 @@ def fetch_radius_traffic(verbose=False):
         "Submit": "Submit"
     }
 
+    # Fresh session per call: this function runs on worker threads from
+    # several concurrent entry points (hourly check, /balance, /limit), and
+    # requests.Session is not safe for cross-thread sharing.
+    session = requests.Session()
+
     try:
-        login_resp = RADIUS_SESSION.post(
+        login_resp = session.post(
             f"{RADIUS_URL}/radiusmanager/user.php?cont=login",
             data=payload,
-            timeout=30
+            timeout=RADIUS_LOGIN_TIMEOUT
         )
 
         if verbose:
             login_resp.raise_for_status()
 
-        RADIUS_SESSION.get(
+        session.get(
             f"{RADIUS_URL}/radiusmanager/user.php?cont=change_lang&lang=English",
-            timeout=30
+            timeout=RADIUS_LOGIN_TIMEOUT
         )
 
-        dash = RADIUS_SESSION.get(
+        dash = session.get(
             f"{RADIUS_URL}/radiusmanager/user.php",
-            timeout=30
+            timeout=RADIUS_LOGIN_TIMEOUT
         )
 
         if verbose:
@@ -86,39 +91,38 @@ def fetch_radius_traffic(verbose=False):
 
                 return balance
 
-        if verbose:
-            logger.warning(
-                "Balance field not found in dashboard HTML."
-            )
+        logger.warning(
+            "Balance field not found in dashboard HTML."
+        )
 
         return None
 
     except requests.exceptions.Timeout:
 
-        if verbose:
-            logger.error(
-                "Timeout: Radius Dashboard is not responding."
-            )
+        logger.error(
+            "Timeout: Radius Dashboard is not responding."
+        )
 
         return None
 
     except requests.exceptions.ConnectionError:
 
-        if verbose:
-            logger.error(
-                "Connection Error: Could not connect to Radius."
-            )
+        logger.error(
+            "Connection Error: Could not connect to Radius."
+        )
 
         return None
 
     except Exception as e:
 
-        if verbose:
-            logger.error(
-                f"Unexpected error in fetch_radius_traffic: {e}"
-            )
+        logger.error(
+            f"Unexpected error in fetch_radius_traffic: {e}"
+        )
 
         return None
+
+    finally:
+        session.close()
 
 
 def apply_lockdown_for_traffic(traffic_value):

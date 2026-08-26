@@ -36,14 +36,22 @@ def enable_lockdown(force_lock=False):
         run_cmd("iptables -A LOCKDOWN -j DROP")
         logger.debug(f"Whitelist applied: {len(state.allowed_macs)} devices allowed, others dropped.")
     else:
+        # Order matters: banned first, then PENDING (unreviewed) devices are
+        # dropped unconditionally — fail-safe default until onboarding is done.
         for mac in state.banned_macs:
+            if is_valid_mac(mac):
+                run_cmd(f"iptables -A LOCKDOWN -m mac --mac-source {mac} -j DROP")
+        for mac in state.pending_macs:
             if is_valid_mac(mac):
                 run_cmd(f"iptables -A LOCKDOWN -m mac --mac-source {mac} -j DROP")
         for mac in state.allowed_macs:
             if is_valid_mac(mac):
                 run_cmd(f"iptables -A LOCKDOWN -m mac --mac-source {mac} -j ACCEPT")
         run_cmd("iptables -A LOCKDOWN -j ACCEPT")
-        logger.debug(f"Banned list applied: {len(state.banned_macs)} devices dropped.")
+        logger.debug(
+            f"Banned list applied: {len(state.banned_macs)} dropped, "
+            f"{len(state.pending_macs)} pending-onboarding dropped."
+        )
 
     run_cmd("iptables -D FORWARD -i br0 -j LOCKDOWN 2>/dev/null")
     run_cmd("iptables -I FORWARD 1 -i br0 -j LOCKDOWN")
@@ -53,7 +61,7 @@ def enable_lockdown(force_lock=False):
         _kick_non_allowed_devices()
 
 
-def _reapply_firewall_state():
+def reapply_firewall_state():
     """Reapply firewall rules during bot startup."""
     enable_lockdown(force_lock=state.lockdown_state)
 
@@ -69,8 +77,12 @@ def ban_mac(mac, reason="manual"):
         db.ban_device(mac, reason=reason)
         logger.info(f"Internal: Added {mac} to banned set (reason={reason}).")
         enable_lockdown(force_lock=state.lockdown_state)
+    elif db.ban_device(mac, reason=reason):
+        logger.warning(
+            f"Internal: {mac} was already banned — ban reason overwritten to '{reason}'."
+        )
     else:
-        logger.warning(f"Internal: {mac} is already in banned set, skipping rewrite.")
+        logger.debug(f"Internal: {mac} already banned with reason '{reason}', nothing to change.")
 
 
 def unban_mac(mac):

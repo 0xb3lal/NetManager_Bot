@@ -50,6 +50,7 @@ def setup(bot):
             extra_quota = usage_db.get_extra_quota(mac_upper)
             effective_limit = base_limit + extra_quota
             remaining = max(effective_limit - usage_gb, 0)
+            exempt = db.is_exempt_from_daily_limit(mac_upper)
 
             device_name = state.macs_list.get(mac_upper, mac_upper)
             is_banned = mac_upper in state.banned_macs
@@ -71,7 +72,8 @@ def setup(bot):
                 "",
                 f"{'Used Today:'.ljust(15)} {format_data_size(usage_gb)}",
                 f"{'Base Limit:'.ljust(15)} {format_data_size(base_limit)}"
-                + (" (custom)" if has_custom_limit else " (default)"),
+                + (" (custom)" if has_custom_limit else " (default)")
+                + (" (exempt)" if exempt else ""),
             ]
 
             if extra_quota > 0:

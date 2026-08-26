@@ -1,4 +1,5 @@
 import asyncio
+import requests
 
 from discord.ext import tasks
 
@@ -20,21 +21,41 @@ def setup_device_discovery_task(bot):
             )
             return
 
-        try:
-            async with ROUTER_LOCK:
-                await asyncio.to_thread(
-                    fetch_devlist_and_discover,
-                    bot,
+        # Bounded retry: one immediate retry for transient router failures
+        for attempt in range(1, 3):
+            try:
+                async with ROUTER_LOCK:
+                    await asyncio.to_thread(
+                        fetch_devlist_and_discover,
+                        bot,
+                    )
+
+                logger.debug(
+                    "Scheduled device discovery check completed."
                 )
+                break
 
-            logger.debug(
-                "Scheduled device discovery check completed."
-            )
+            except (requests.exceptions.Timeout, requests.exceptions.ConnectionError, RuntimeError) as e:
+                if attempt == 1:
+                    logger.warning(
+                        f"Device discovery failed (attempt 1/2): {e}, retrying in 2s"
+                    )
+                    # Release lock before sleep (exited async with), then sleep outside
+                    await asyncio.sleep(2)
+                    continue
+                logger.exception(
+                    f"Error in device discovery task after retry: {e}"
+                )
+                break
 
-        except Exception as e:
-            logger.exception(
-                f"Error in device discovery task: {e}"
-            )
+            except asyncio.CancelledError:
+                raise
+
+            except Exception as e:
+                logger.exception(
+                    f"Error in device discovery task: {e}"
+                )
+                break
 
     @device_discovery_task.before_loop
     async def before_device_discovery():

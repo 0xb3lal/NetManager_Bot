@@ -90,6 +90,10 @@ def setup(bot):
             unit_value = unit.value
             value_gb = value / 1024 if unit_value == "MB" else value
 
+            if value_gb <= 0:
+                await interaction.followup.send("`❌` Value must be greater than zero.")
+                return
+
             is_suspicious = value_gb < SUSPICIOUS_LOW_GB or value_gb > SUSPICIOUS_HIGH_GB
 
             if is_suspicious:
@@ -135,7 +139,12 @@ def setup(bot):
             if action.value == "edit":
                 async with QUOTA_LOCK:
                     new_extra_total = usage_db.set_extra_quota(mac_upper, value_gb)
-                    new_effective_limit = db.get_effective_daily_limit(mac_upper)
+
+                if new_extra_total is None:
+                    await interaction.followup.send("`❌` Failed to update extra quota.")
+                    return
+
+                new_effective_limit = db.get_effective_daily_limit(mac_upper)
                 title = "`✏️` Extra Quota Edited"
                 extra_lines = f"Set To:        {format_data_size(value_gb)}\n"
                 log_verb = "edited (set)"
@@ -143,9 +152,14 @@ def setup(bot):
                 await recheck_device_after_limit_change(bot, mac_upper)
 
             else:  # add
-                new_extra_total, new_effective_limit, usage_gb = await add_extra_quota_covering_overage(
+                result = await add_extra_quota_covering_overage(
                     bot, mac_upper, value_gb
                 )
+                if result is None:
+                    await interaction.followup.send("`❌` Failed to update extra quota.")
+                    return
+
+                new_extra_total, new_effective_limit, usage_gb = result
                 title = "`➕` Extra Quota Added"
                 extra_lines = (
                     f"Usage Now:     {format_data_size(usage_gb)}\n"

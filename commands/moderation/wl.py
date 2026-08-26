@@ -66,10 +66,17 @@ async def wl(
 
         db.add_device(mac, hostname)
         state.macs_list[mac] = hostname
-        db.set_device_allowed(mac, True)
-        state.allowed_macs.append(mac)
 
         async with ROUTER_LOCK:
+            # Mutate shared whitelist state inside the same lock as the
+            # firewall rebuild — enable_lockdown iterates these collections
+            # in a worker thread.
+            db.set_device_allowed(mac, True)
+            state.allowed_macs.append(mac)
+            # Whitelisting resolves onboarding explicitly; a whitelisted-but-still-
+            # pending device would keep getting dropped by the firewall rules.
+            db.set_onboarding_confirmed(mac)
+            state.pending_macs.discard(mac)
             await asyncio.to_thread(
                 enable_lockdown,
                 force_lock=state.lockdown_state,
@@ -82,10 +89,12 @@ async def wl(
 
     elif action_value == "remove":
         if mac in state.allowed_macs:
-            state.allowed_macs.remove(mac)
-            db.set_device_allowed(mac, False)
-
             async with ROUTER_LOCK:
+                # Same lock discipline as add: mutate whitelist state and
+                # rebuild the firewall atomically.
+                if mac in state.allowed_macs:
+                    state.allowed_macs.remove(mac)
+                db.set_device_allowed(mac, False)
                 await asyncio.to_thread(
                     enable_lockdown,
                     force_lock=state.lockdown_state,

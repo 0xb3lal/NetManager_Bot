@@ -1,6 +1,6 @@
 import asyncio
 from logger import logger
-from state import state
+from state import state, ROUTER_LOCK
 import db
 import usage_db
 import telegram.db as telegram_db
@@ -23,7 +23,8 @@ async def handle_usage_command(chat_id: str, first_name: str = ""):
 
     await telegram_client.send_chat_action(chat_id, "typing")
 
-    usage_by_mac = await asyncio.to_thread(get_today_usage_by_mac)
+    async with ROUTER_LOCK:
+        usage_by_mac = await asyncio.to_thread(get_today_usage_by_mac)
     usage_gb = usage_by_mac.get(mac, 0)
 
     effective_limit = db.get_effective_daily_limit(mac)

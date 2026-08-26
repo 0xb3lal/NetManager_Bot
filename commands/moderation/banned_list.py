@@ -48,7 +48,7 @@ def setup(bot):
                 sections = []
 
                 if manual_lines:
-                    sections.append("🔒 Manual:")
+                    sections.append("🔒 Manual / Other:")
                     sections += [
                         f"  {i:02d}. {name}"
                         for i, name in enumerate(manual_lines, 1)
