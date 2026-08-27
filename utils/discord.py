@@ -2,6 +2,20 @@ import discord
 
 from logger import logger
 
+
+async def ensure_admin(interaction: discord.Interaction) -> bool:
+    """Any administrator may answer onboarding questions (the bot itself
+    starts these messages, so there is no single invoker to restrict to).
+    Mirrors services/onboarding.py:89 _admin_gate but shared via utils
+    to dedup commands/views/bulk_block.py:18 + tasks/anomaly_check.py:144."""
+    user = interaction.user
+    if isinstance(user, discord.Member) and user.guild_permissions.administrator:
+        return True
+    await interaction.response.send_message(
+        "`❌` Only administrators can answer onboarding questions.", ephemeral=True
+    )
+    return False
+
 async def safe_defer(interaction: discord.Interaction, thinking: bool = False) -> bool:
     if interaction.response.is_done():
         return True
