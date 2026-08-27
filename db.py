@@ -370,6 +370,55 @@ def update_hostname(mac: str, hostname: str) -> bool:
         logger.error(f"Error updating hostname for {mac}: {e}")
         return False
 
+def migrate_device_mac(old_mac: str, new_mac: str) -> bool:
+    """Atomically migrate a device's MAC across all MAC-keyed tables.
+
+    Preserves hostname, allowed, onboard_status, exempt_daily_limit,
+    anomaly_handled, last_seen, daily_limits (limit/mode/expires_on),
+    extra_quota, banned reason, daily_notified, device_telegram,
+    threshold_notified. Returns True on success, False on conflict/error
+    with no partial state (transaction rollback).
+    """
+    old_mac = old_mac.strip().upper()
+    new_mac = new_mac.strip().upper()
+    if old_mac == new_mac:
+        return False
+    try:
+        with get_db() as conn:
+            # Conflict checks inside transaction
+            exists_old = conn.execute("SELECT 1 FROM devices WHERE mac=?", (old_mac,)).fetchone()
+            if not exists_old:
+                return False
+            exists_new = conn.execute("SELECT 1 FROM devices WHERE mac=?", (new_mac,)).fetchone()
+            if exists_new:
+                return False
+            # Also check satellites where new already exists would cause PK conflict on UPDATE
+            # For daily_limits etc., check new exists
+            for tbl in ("daily_limits", "extra_quota", "banned", "daily_notified", "device_telegram", "threshold_notified"):
+                try:
+                    row_new = conn.execute(f"SELECT 1 FROM {tbl} WHERE mac=?", (new_mac,)).fetchone()
+                    if row_new:
+                        return False
+                except Exception:
+                    # Table may not exist yet (e.g., device_telegram)
+                    pass
+            # Migrate devices PK
+            conn.execute("UPDATE devices SET mac=? WHERE mac=?", (new_mac, old_mac))
+            # Migrate satellites
+            for tbl in ("daily_limits", "extra_quota", "banned", "daily_notified", "device_telegram", "threshold_notified"):
+                try:
+                    conn.execute(f"UPDATE {tbl} SET mac=? WHERE mac=?", (new_mac, old_mac))
+                except Exception:
+                    pass
+        logger.info(f"Migrated device MAC {old_mac} -> {new_mac}")
+        return True
+    except sqlite3.IntegrityError as e:
+        logger.error(f"MAC migration conflict {old_mac}->{new_mac}: {e}")
+        return False
+    except Exception as e:
+        logger.error(f"Error migrating MAC {old_mac}->{new_mac}: {e}")
+        return False
+
 # ========= BANNED =========
 def get_banned() -> set:
     with get_db() as conn:

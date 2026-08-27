@@ -1,11 +1,27 @@
 import re
 import asyncio
+import time
 
 import db
 
 from logger import logger
 from state import state
 from services.onboarding import start_onboarding
+
+# TTL guards to prevent stale discovery from recreating old MAC immediately after edit/remove
+# Maps MAC -> expiry timestamp (seconds since epoch)
+_recently_migrated: dict[str, float] = {}
+_recently_removed: dict[str, float] = {}
+
+def _is_recently_guarded(mac: str) -> bool:
+    now = time.time()
+    # Clean expired entries lazily
+    for d in (_recently_migrated, _recently_removed):
+        for k, exp in list(d.items()):
+            if exp < now:
+                d.pop(k, None)
+    m = mac.upper()
+    return m in _recently_migrated or m in _recently_removed
 
 from config import (
     ROUTER_URL,
@@ -63,6 +79,10 @@ def fetch_devlist_and_discover(bot_instance):
     new_devices = []
     for lease in dhcp_leases:
         mac      = lease[2].upper()
+        # TTL guard: skip recently migrated/removed old MACs to prevent immediate ghost recreation
+        if _is_recently_guarded(mac):
+            logger.debug(f"Discovery skipping recently migrated/removed MAC {mac} (TTL guard)")
+            continue
         hostname = lease[0].strip() or "Unknown"
         ip       = lease[1]
         existing = state.macs_list.get(mac)
