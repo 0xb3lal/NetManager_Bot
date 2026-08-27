@@ -116,18 +116,16 @@ def setup(bot):
                 await interaction.followup.send(embed=embed)
                 return
 
-            # Success: trigger immediate discovery resync to pull router truth into DB/cache
+            # Success: immediately sync DB + state so /macs shows new hostname without waiting for DHCP renewal
+            try:
+                db.update_hostname(mac_upper, name)
+                state.macs_list[mac_upper] = name
+            except Exception as e:
+                logger.warning(f"Failed to sync DB/state hostname after rename for {mac_upper}: {e}")
+            # Trigger immediate discovery resync to pull router truth (ip_to_mac_cache/last_seen) — does not overwrite custom hostname (protected in fetch_devlist_and_discover)
             try:
                 async with ROUTER_LOCK:
                     await asyncio.to_thread(fetch_devlist)
-                # Also ensure state reflects new name eventually via discovery; but fetch_devlist updates ip_to_mac_cache and refresh_last_seen, not macs_list directly? fetch_devlist_and_discover updates macs_list.
-                # Force sync: update local state to new name (will be overwritten by next discovery poll anyway from router truth)
-                # We let normal discovery update DB/cache, but we can optimistically update for immediate feedback
-                # The DB will be updated on next discovery poll from router's dhcpd_static? Actually discovery polls dhcp leases not static leases.
-                # Hostname from static lease vs lease hostname: static assignment hostname may not appear in dhcpd_lease until renewal.
-                # So we update state optimistically for display, but DB remains to be synced via next poll that reads lease hostname? 
-                # To keep router as source of truth, we don't write DB directly here; we just inform user.
-                pass
             except Exception as e:
                 logger.warning(f"Post-rename discovery resync failed: {e}")
 

@@ -32,7 +32,7 @@ def fetch_devlist():
     dhcp_leases   = demjson3.decode(dhcp_match.group(1))
     wireless_devs = demjson3.decode(wldev_match.group(1))
     arp_list      = demjson3.decode(arp_match.group(1))
-    
+
     seen_macs = []
     for lease in dhcp_leases:
         ip = lease[1]
@@ -65,10 +65,20 @@ def fetch_devlist_and_discover(bot_instance):
         mac      = lease[2].upper()
         hostname = lease[0].strip() or "Unknown"
         ip       = lease[1]
-        if db.add_device(mac, hostname):
-            new_devices.append((mac, hostname, ip))
-        if state.macs_list.get(mac) != hostname:
-            state.macs_list[mac] = hostname
+        existing = state.macs_list.get(mac)
+        # Protect custom hostname: do not overwrite non-Unknown with Unknown
+        if hostname.lower() == "unknown" and existing and existing.lower() != "unknown":
+            # Keep existing custom hostname; still ensure device exists in DB (no hostname change)
+            if not db.device_exists(mac):
+                # New device with Unknown — insert as Unknown (preserves pending flow)
+                if db.add_device(mac, hostname):
+                    new_devices.append((mac, hostname, ip))
+            # Do not update state.macs_list with Unknown
+        else:
+            if db.add_device(mac, hostname):
+                new_devices.append((mac, hostname, ip))
+            if state.macs_list.get(mac) != hostname:
+                state.macs_list[mac] = hostname
     if new_devices and bot_instance.loop.is_running():
         async def _onboard_new_devices():
             # New devices are inserted as PENDING (firewall-dropped) by

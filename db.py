@@ -318,6 +318,35 @@ def get_hostname(mac: str) -> str:
         ).fetchone()
     return row["hostname"] if row else mac
 
+def update_hostname(mac: str, hostname: str) -> bool:
+    """Update only the hostname for an existing device.
+
+    Does NOT touch onboard_status, allowed, exempt_daily_limit,
+    anomaly_handled, last_seen, banned, limits, etc.
+    Returns True if row was updated.
+    """
+    mac = mac.upper()
+    hostname = hostname.strip() or "Unknown"
+    try:
+        with get_db() as conn:
+            row = conn.execute(
+                "SELECT hostname FROM devices WHERE mac = ?", (mac,)
+            ).fetchone()
+            if row is None:
+                return False
+            if row["hostname"] == hostname:
+                return False
+            conn.execute(
+                "UPDATE devices SET hostname = ? WHERE mac = ?", (hostname, mac)
+            )
+            updated = conn.execute("SELECT changes() as c").fetchone()["c"]
+        if updated:
+            logger.info(f"Hostname updated for {mac}: '{row['hostname']}' -> '{hostname}' (via update_hostname)")
+        return bool(updated)
+    except Exception as e:
+        logger.error(f"Error updating hostname for {mac}: {e}")
+        return False
+
 # ========= BANNED =========
 def get_banned() -> set:
     with get_db() as conn:
