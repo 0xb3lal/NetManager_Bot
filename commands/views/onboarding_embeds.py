@@ -34,11 +34,11 @@ def _kickoff_embed(session) -> discord.Embed:
     ]
     if RSSI_DISPLAY_ENABLED:
         if session.rssi_dbm is not None and session.quality_pct is not None:
-            lines.append(("Signal:", f"`📶` {session.quality_pct}%"))
+            lines.append(("Signal:", f"📶 {session.quality_pct}%"))
         else:
             lines.append(("Signal:", "— (wired)"))
         if DISTANCE_ESTIMATION_ENABLED and session.distance_m is not None:
-            lines.append(("Distance:", f"`📏` ~{session.distance_m:.1f} m"))
+            lines.append(("Distance:", f"📏 ~{session.distance_m:.1f} m"))
     footer = "This device is blocked. Answer below to finish setup."
     if DISTANCE_ESTIMATION_ENABLED and session.distance_m is not None:
         footer = "Est. distance is approximate (±50%+ indoors) • " + footer
