@@ -7,7 +7,7 @@ from state import state, ROUTER_LOCK
 from utils.discord import safe_defer
 from utils.validators import is_valid_mac
 from utils.autocomplete import all_macs_autocomplete
-from router.static_leases import set_static_hostname, resolve_ip_for_mac, is_valid_ip, is_valid_hostname
+from router.static_leases import set_static_hostname, is_valid_ip, is_valid_hostname
 from router.devices import fetch_devlist
 from services.onboarding import RenameModal
 
@@ -33,7 +33,7 @@ def setup(bot):
         if not await safe_defer(interaction, thinking=True):
             return
         try:
-            mac_upper = mac.upper()
+            mac_upper = mac.strip().upper()
             if not is_valid_mac(mac_upper):
                 await interaction.followup.send("`❌` Invalid MAC address format.")
                 return
@@ -45,30 +45,57 @@ def setup(bot):
                 await interaction.followup.send("`❌` Invalid hostname. Use 1-32 alphanumeric/hyphen characters, must start/end with alnum.")
                 return
             name = name.strip()
-            # Resolve IP: explicit IP takes precedence, otherwise fresh lookup first, cache fallback
-            resolved_ip = ip
-            if not resolved_ip:
-                # Fresh router lookup first (authoritative), cache only as fallback
+            # Resolve IP with strict priority: explicit IP > active DHCP > static DHCP > ask user
+            resolved_ip = None
+            explicit_ip = ip.strip() if isinstance(ip, str) and ip.strip() else None
+            if explicit_ip:
+                if not is_valid_ip(explicit_ip):
+                    await interaction.followup.send("`❌` Invalid IP address format.")
+                    return
+                resolved_ip = explicit_ip
+            else:
+                # STEP 1 — Active DHCP leases (authoritative current IP)
                 try:
                     async with ROUTER_LOCK:
                         dhcp_leases, _, _ = await asyncio.to_thread(fetch_devlist)
                     for lease in dhcp_leases:
-                        if lease[2].upper() == mac_upper:
-                            resolved_ip = lease[1]
+                        # lease format: [hostname, ip, mac, ...]
+                        try:
+                            lease_mac = str(lease[2]).strip().upper()
+                            lease_ip = str(lease[1]).strip() if lease[1] else ""
+                        except Exception:
+                            continue
+                        if lease_mac == mac_upper and lease_ip and is_valid_ip(lease_ip):
+                            resolved_ip = lease_ip
                             break
                 except asyncio.CancelledError:
                     raise
                 except Exception as e:
-                    logger.warning(f"Fresh IP lookup failed for {mac_upper}: {e}")
+                    logger.warning(f"Active DHCP lookup failed for {mac_upper}: {e}")
+                # STEP 2 — Static DHCP leases (fallback)
                 if not resolved_ip:
-                    resolved_ip = resolve_ip_for_mac(mac_upper)
-                    if resolved_ip:
-                        logger.debug(f"Using cached IP fallback for {mac_upper}: {resolved_ip}")
+                    try:
+                        from router.static_leases import fetch_current_entries
+                        async with ROUTER_LOCK:
+                            entries, _ = await asyncio.to_thread(fetch_current_entries)
+                        for ent in entries:
+                            try:
+                                ent_mac = str(ent.get("mac", "")).strip().upper()
+                                ent_ip = str(ent.get("ip", "")).strip() if ent.get("ip") else ""
+                            except Exception:
+                                continue
+                            if ent_mac == mac_upper and ent_ip and is_valid_ip(ent_ip):
+                                resolved_ip = ent_ip
+                                break
+                    except asyncio.CancelledError:
+                        raise
+                    except Exception as e:
+                        logger.warning(f"Static DHCP lookup failed for {mac_upper}: {e}")
             if not resolved_ip:
-                await interaction.followup.send("`❌` Could not resolve device IP. Please provide IP explicitly: `/rename mac:... name:... ip:192.168.1.x`")
-                return
-            if not is_valid_ip(resolved_ip):
-                await interaction.followup.send("`❌` Invalid IP address format.")
+                await interaction.followup.send(
+                    f"`❌` Could not resolve IP for {mac_upper}.\n\n"
+                    f"Please provide it explicitly:\n`/rename mac:{mac_upper} name:{name} ip:192.168.1.x`"
+                )
                 return
 
             # Call router-native writer with bounded retry (3 attempts) without holding lock during sleeps
