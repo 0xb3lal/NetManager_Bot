@@ -37,16 +37,15 @@ def is_valid_ip(ip: str) -> bool:
         return True
 
 def _escape_field(s: str) -> str:
-    # Escape backslash first, then :, <, >
+    # Tomato dhcpd_static delimiters are < and > ; only they and backslash need escaping.
+    # MAC colons must NOT be escaped — canonical form is AA:BB:CC:DD:EE:FF.
     s = s.replace("\\", "\\\\")
-    s = s.replace(":", "\\:")
     s = s.replace("<", "\\<")
     s = s.replace(">", "\\>")
     return s
 
 def _unescape_field(s: str) -> str:
-    # Reverse: handle escaped backslash correctly
-    # Replace escaped sequences
+    # Reverse of _escape_field, plus legacy \: for already-corrupted data.
     res = []
     i = 0
     while i < len(s):
@@ -59,6 +58,24 @@ def _unescape_field(s: str) -> str:
         res.append(s[i])
         i += 1
     return "".join(res)
+
+def _normalize_mac(mac: str) -> str:
+    """Normalize MAC field to canonical AA:BB:CC:DD:EE:FF.
+
+    Handles legacy corruption: \\x5c: , \\x5c , \\:, stray backslashes.
+    Only applied to MAC field, not hostnames.
+    """
+    if not mac:
+        return mac
+    import re
+    mac = re.sub(r'\\x5c:', ':', mac, flags=re.IGNORECASE)
+    mac = re.sub(r'\\x5c', '', mac, flags=re.IGNORECASE)
+    mac = mac.replace("\\:", ":")
+    mac = mac.replace("\\", "")
+    m = re.search(r'([0-9A-Fa-f]{2}(?::[0-9A-Fa-f]{2}){5})', mac)
+    if m:
+        return m.group(1).upper()
+    return mac.upper()
 
 def _split_unescaped(s: str, delim: str):
     parts = []
@@ -93,7 +110,7 @@ def _parse_raw_entries(raw: str):
     """
     if not raw or not raw.strip():
         return []
-    # Split on unescaped ">" 
+    # Split on unescaped ">"
     # Since ">" is delimiter between entries, we need to split on ">" not preceded by "\"
     entries = []
     cur = []
@@ -144,7 +161,8 @@ def _parse_raw_entries(raw: str):
             logger.warning(f"Malformed dhcpd_static entry skipped: {ent_raw!r}")
             continue
         mac_e, ip_e, host_e, flag_e = parts[0], parts[1], parts[2], parts[3]
-        mac = _unescape_field(mac_e).upper()
+        mac_raw = _unescape_field(mac_e)
+        mac = _normalize_mac(mac_raw)
         ip = _unescape_field(ip_e)
         hostname = _unescape_field(host_e)
         flag = _unescape_field(flag_e)
@@ -159,13 +177,11 @@ def _serialize_entry(mac: str, ip: str, hostname: str, flag: str = "0") -> str:
     return f"{mac_e}<{ip_e}<{host_e}<{flag}"
 
 def _fetch_raw_via_nvram(timeout=15):
-    """Fetch current dhcpd_static via shell nvram get."""
-    from router.client import run_cmd_output
-    out = run_cmd_output("nvram get dhcpd_static", timeout=timeout)
+    """Fetch current dhcpd_static via shell nvram get (decoded)."""
+    from router.client import run_cmd_output_value
+    out = run_cmd_output_value("nvram get dhcpd_static", timeout=timeout)
     if out is None:
         return None
-    # run_cmd_output returns response.text which may include extra whitespace/newlines
-    # The shell.cgi output for nvram get is plain value with trailing newline
     return out.strip()
 
 def fetch_current_entries():
@@ -230,17 +246,16 @@ def set_static_hostname_sync(mac: str, ip: str, hostname: str):
         entries, raw = fetch_current_entries()
     except Exception as e:
         return False, f"Failed to read current leases: {e}"
-    # Build new raw preserving unrelated entries exactly
+    # Build new raw — re-serialize every entry through canonical form to heal corruption
     found = False
     new_raw_parts = []
     for ent in entries:
         if ent["mac"].upper() == mac.upper():
-            # Update this entry
             new_ent_raw = _serialize_entry(mac, ip, hostname, ent["flag"] if ent["flag"] else "0")
             new_raw_parts.append(new_ent_raw)
             found = True
         else:
-            new_raw_parts.append(ent["raw"])
+            new_raw_parts.append(_serialize_entry(ent["mac"], ent["ip"], ent["hostname"], ent["flag"] if ent["flag"] else "0"))
     if not found:
         new_raw_parts.append(_serialize_entry(mac, ip, hostname, "0"))
     new_raw = ">".join(new_raw_parts)
