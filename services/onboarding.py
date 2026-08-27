@@ -243,9 +243,9 @@ class OnboardingQ1View(_OnboardingBaseView):
         session.step = "q2"
         session.context = "allowed"
 
-        # Q2 (daily limit) is always asked when allowed; only Q3 depends on
+        # Q2 (whitelist) is always asked when allowed; only Q3 depends on
         # the reported hostname being unknown.
-        await session.message.edit(embed=_limit_question_embed(session), view=OnboardingQ2View(session))
+        await session.message.edit(embed=_whitelist_question_embed(session), view=OnboardingQ2View(session))
 
     @discord.ui.button(label="🚫 Block", style=discord.ButtonStyle.danger)
     async def block(self, interaction: discord.Interaction, button: discord.ui.Button):
