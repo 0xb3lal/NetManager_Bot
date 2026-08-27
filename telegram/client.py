@@ -4,9 +4,8 @@ from config import TELEGRAM_BOT_TOKEN
 
 TELEGRAM_API_BASE = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}"
 
-
 async def send_message(chat_id: str, text: str) -> bool:
-    """Send an HTML-formatted text message to a Telegram chat via the Bot API."""
+    """Send HTML message to Telegram chat via Bot API."""
     if not TELEGRAM_BOT_TOKEN:
         logger.warning("TELEGRAM_BOT_TOKEN not configured, skipping Telegram notification.")
         return False
@@ -35,9 +34,8 @@ async def send_message(chat_id: str, text: str) -> bool:
         logger.error(f"Error sending Telegram message to {chat_id}: {e}")
         return False
 
-
 async def send_chat_action(chat_id: str, action: str = "typing") -> bool:
-    """Send a chat action (e.g. 'typing') to indicate the bot is processing."""
+    """Send Telegram chat action (typing)."""
     if not TELEGRAM_BOT_TOKEN:
         return False
     if not chat_id:
@@ -64,14 +62,8 @@ async def send_chat_action(chat_id: str, action: str = "typing") -> bool:
         logger.error(f"Error sending chat action to {chat_id}: {e}")
         return False
 
-
 async def get_updates(offset: int | None = None, timeout: int = 30) -> list:
-    """
-    Long-poll Telegram for new incoming updates (messages) since `offset`.
-    Blocks up to `timeout` seconds server-side if there's nothing new yet —
-    this is the standard Telegram long-polling pattern, so callers should
-    just loop and call this repeatedly without extra sleeps.
-    """
+    """Long-poll Telegram getUpdates (blocks up to timeout)."""
     if not TELEGRAM_BOT_TOKEN:
         return []
 
@@ -97,11 +89,7 @@ async def get_updates(offset: int | None = None, timeout: int = 30) -> list:
         return []
 
 async def set_bot_commands() -> bool:
-    """
-    Register the bot's command list with Telegram so it shows up in the
-    "/" menu button in every chat with the bot. Call this once at startup
-    (safe to call every time — Telegram just overwrites the list).
-    """
+    """Register bot command menu with Telegram."""
     if not TELEGRAM_BOT_TOKEN:
         return False
 

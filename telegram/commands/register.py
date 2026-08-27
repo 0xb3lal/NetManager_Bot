@@ -11,9 +11,8 @@ from logger import logger
 
 COMMAND_HANDLERS = {}
 
-
 def command(name: str):
-    """Decorator: registers an async handler(chat_id, first_name) under a command name."""
+    """Register Telegram command handler under name."""
     def decorator(func):
         COMMAND_HANDLERS[name] = func
         logger.info(f"Telegram command registered: {name} -> {func.__name__}")

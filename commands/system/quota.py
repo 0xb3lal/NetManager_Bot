@@ -13,11 +13,8 @@ from services.limits import (
     add_extra_quota_covering_overage,
 )
 
-# Values below this are probably an MB value entered without switching the unit dropdown.
 SUSPICIOUS_LOW_GB = 0.1
-# Values above this are probably a GB value that was meant to be smaller (e.g. typo).
 SUSPICIOUS_HIGH_GB = 1.0
-
 
 class QuotaConfirmView(discord.ui.View):
     """Confirmation prompt shown when a quota value looks like a unit mistake."""
@@ -46,7 +43,6 @@ class QuotaConfirmView(discord.ui.View):
         self.confirmed = False
         self.stop()
         await interaction.response.defer()
-
 
 def setup(bot):
 
@@ -133,7 +129,6 @@ def setup(bot):
                     )
                     return
 
-                # Confirmed — clear the buttons off the warning message and continue below.
                 await warning_msg.edit(view=None)
 
             if action.value == "edit":

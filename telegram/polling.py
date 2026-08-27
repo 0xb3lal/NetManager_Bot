@@ -7,12 +7,8 @@ import telegram.commands as telegram_commands
 _POLL_TIMEOUT = 30  # seconds — Telegram long-polling wait time per request
 _ERROR_BACKOFF = 5  # seconds — pause before retrying after a failure
 
-
 async def telegram_polling_loop():
-    """
-    Continuously long-poll Telegram for new messages and dispatch them.
-    Meant to be run as a background asyncio task for the lifetime of the bot.
-    """
+    """Long-poll Telegram and dispatch updates."""
     last_update_id = 0
     logger.info("Telegram command polling started.")
 
@@ -33,16 +29,10 @@ async def telegram_polling_loop():
             logger.error(f"Error in Telegram polling loop: {e}")
             await asyncio.sleep(_ERROR_BACKOFF)
 
-
 def start_telegram_polling():
-    """Call once at bot startup (e.g. in main.py after bot is ready) to launch the polling loop."""
+    """Start Telegram polling task."""
     return asyncio.create_task(telegram_polling_loop())
 
-
 async def initialize_telegram_bot():
-    """
-    Call once at startup, before start_telegram_polling(): registers the
-    bot's command menu with Telegram (so /usage and /start show up in the
-    "/" button in the chat UI).
-    """
+    """Register Telegram command menu at startup."""
     await telegram_client.set_bot_commands()

@@ -10,13 +10,10 @@ from services.traffic import get_today_usage_by_mac
 from utils.traffic import format_data_size
 from telegram.alerts import check_and_send_threshold_alerts
 
-
 def setup_daily_usage_monitor_task(bot):
-    """Create and configure the daily usage monitor task."""
 
     @tasks.loop(minutes=10.0)
     async def daily_usage_monitor_task():
-        """Monitor daily usage and auto-block devices exceeding limits."""
         logger.info("Daily usage monitor task TRIGGERED — starting scheduled check...")
         await _run_daily_usage_monitor_check(bot)
 
@@ -28,7 +25,6 @@ def setup_daily_usage_monitor_task(bot):
         logger.info("Daily usage monitor task started (checks per-device usage every 10 minutes).")
 
     return daily_usage_monitor_task
-
 
 async def _run_daily_usage_monitor_check(bot):
     """Check device usage and enforce daily limits."""

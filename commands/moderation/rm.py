@@ -10,7 +10,6 @@ from utils.discord import safe_defer
 from utils.autocomplete import banned_macs_autocomplete
 from router.firewall import unban_mac
 
-
 def setup(bot):
 
     @bot.tree.command(

@@ -29,11 +29,6 @@ from utils.traffic import format_data_size
 
 ONBOARDING_STEP_TIMEOUT = 600  # seconds each question waits for an answer
 
-# Style mapping follows the codebase conventions:
-#   0xf39c12 orange  = new / attention      (matches old discovery alert)
-#   0x2ecc71 green   = success              (matches recovered/allowed embeds)
-#   0xff4747 red     = blocked / danger     (matches auto-block embeds)
-
 _COLOR_NEW = 0xF39C12
 _COLOR_OK = 0x2ECC71
 _COLOR_BLOCK = 0xFF4747
@@ -44,7 +39,6 @@ def _device_name(mac: str) -> str:
 
 
 class OnboardingSession:
-    """State of one device's question chain. Keyed by MAC in _sessions."""
 
     def __init__(self, mac: str, hostname: str, ip: str = None):
         self.mac = mac
@@ -179,10 +173,7 @@ def _blocked_ack_embed(session: OnboardingSession) -> discord.Embed:
     return embed
 
 
-# ---------------------------------------------------------------- views ----
-
 class _OnboardingBaseView(discord.ui.View):
-    """Shared plumbing: author gate, existence guard, timeout fail-safe."""
 
     def __init__(self, session: OnboardingSession, step_tag: str):
         super().__init__(timeout=ONBOARDING_STEP_TIMEOUT)
@@ -213,7 +204,6 @@ class _OnboardingBaseView(discord.ui.View):
 
 
 class OnboardingQ1View(_OnboardingBaseView):
-    """Q1 — Allow internet access?"""
 
     def __init__(self, session: OnboardingSession):
         super().__init__(session, step_tag="q1")
@@ -271,7 +261,6 @@ class OnboardingQ1View(_OnboardingBaseView):
 
 
 class OnboardingQ2View(_OnboardingBaseView):
-    """Q2 — Add this device to the whitelist? Simple Yes/No."""
 
     def __init__(self, session: OnboardingSession):
         super().__init__(session, step_tag="q2")
@@ -284,7 +273,6 @@ class OnboardingQ2View(_OnboardingBaseView):
             return
         await interaction.response.defer()
 
-        # Reuse existing /wl add internals
         async with ROUTER_LOCK:
             db.set_device_allowed(session.mac, True)
             if session.mac not in state.allowed_macs:
@@ -318,8 +306,6 @@ class OnboardingQ2View(_OnboardingBaseView):
 
 
 class OnboardingQ3View(_OnboardingBaseView):
-    """Q3 — Assign a custom name now, or leave it unknown?
-    Asked even for blocked devices (naming aids identification)."""
 
     def __init__(self, session: OnboardingSession):
         super().__init__(session, step_tag="q3")
@@ -342,7 +328,6 @@ class OnboardingQ3View(_OnboardingBaseView):
 
 
 class RenameModal(discord.ui.Modal):
-    """Text input for assigning a custom device name via router static lease."""
 
     name_input = discord.ui.TextInput(
         label="Custom device name",
@@ -360,7 +345,6 @@ class RenameModal(discord.ui.Modal):
         if _device_gone(session):
             await _gone_notice(session)
             return
-        # Defer safely: check is_done, handle HTTPException, propagate CancelledError
         try:
             if not interaction.response.is_done():
                 await interaction.response.defer()
@@ -371,7 +355,6 @@ class RenameModal(discord.ui.Modal):
         except Exception as e:
             logger.warning(f"Unexpected defer error for {session.mac}: {e}")
 
-        # Ensure session is never orphaned, even on unexpected failure or cancellation
         try:
             new_name = str(self.name_input.value).strip()
             if not new_name:
@@ -381,7 +364,6 @@ class RenameModal(discord.ui.Modal):
                     await _finish_blocked(session)
                 return
 
-            # Validate hostname
             from router.static_leases import is_valid_hostname, set_static_hostname, resolve_ip_for_mac
             if not is_valid_hostname(new_name):
                 try:
@@ -392,15 +374,12 @@ class RenameModal(discord.ui.Modal):
                     )
                 except Exception:
                     logger.warning(f"Failed to edit message for invalid hostname {session.mac}")
-                # Keep hostname unchanged, finish with error notice but preserve flow
                 if session.context == "allowed":
                     await _finish_allowed(session)
                 else:
                     await _finish_blocked(session)
                 return
 
-            # Resolve IP for router static lease (router requires MAC+IP)
-            # Fresh lookup first (authoritative), cache/session fallback only if fresh fails
             ip = None
             try:
                 from router.devices import fetch_devlist
@@ -435,7 +414,6 @@ class RenameModal(discord.ui.Modal):
                     await _finish_blocked(session)
                 return
 
-            # Router-native write with bounded retry (3 attempts)
             success, err = await set_static_hostname(session.mac, ip, new_name)
             if not success:
                 logger.error(f"Onboarding rename failed for {session.mac} -> {new_name} ({ip}): {err}")
@@ -447,14 +425,12 @@ class RenameModal(discord.ui.Modal):
                     )
                 except Exception:
                     logger.warning(f"Failed to edit router failure message for {session.mac}")
-                # Do not modify DB/cache, finish flow
                 if session.context == "allowed":
                     await _finish_allowed(session)
                 else:
                     await _finish_blocked(session)
                 return
 
-            # Success: trigger immediate discovery resync to pull router truth
             try:
                 from router.devices import fetch_devlist
                 async with ROUTER_LOCK:
@@ -464,7 +440,6 @@ class RenameModal(discord.ui.Modal):
             except Exception as e:
                 logger.warning(f"Post-rename discovery resync failed: {e}")
 
-            # Optimistically update cache for immediate feedback (will be confirmed by next poll)
             state.macs_list[session.mac] = new_name
             session.named = new_name
 
@@ -473,7 +448,6 @@ class RenameModal(discord.ui.Modal):
             else:
                 await _finish_blocked(session)
         except asyncio.CancelledError:
-            # Guarantee cleanup on cancellation, then propagate
             try:
                 drop_session(session.mac)
             except Exception:
@@ -489,15 +463,12 @@ class RenameModal(discord.ui.Modal):
                 )
             except Exception:
                 logger.warning(f"Failed to edit unexpected error message for {session.mac}")
-            # Ensure no orphaned session
             try:
                 if session.mac in _sessions:
                     drop_session(session.mac)
             except Exception:
                 pass
         finally:
-            # Final safety net: ensure session is cleaned up if still present and not finished via _finish_*
-            # _finish_* already drops, so this is idempotent (pop with default)
             if session.mac in _sessions and session.step != "done":
                 logger.warning(f"RenameModal finally cleanup for orphaned session {session.mac}")
                 try:
@@ -505,8 +476,6 @@ class RenameModal(discord.ui.Modal):
                 except Exception:
                     pass
 
-
-# --------------------------------------------------------------- finish ----
 
 async def _finish_allowed(session: OnboardingSession):
     session.step = "done"
@@ -528,8 +497,6 @@ async def _finish_blocked(session: OnboardingSession):
         logger.error(f"Failed to send onboarding ack for {session.mac}: {e}")
 
 
-# ---------------------------------------------------------------- entry ----
-
 async def start_onboarding(bot_instance, mac: str, hostname: str, ip: str = None):
     """Open the question chain for a freshly discovered (already PENDING) MAC."""
     mac = mac.upper()
@@ -543,7 +510,6 @@ async def start_onboarding(bot_instance, mac: str, hostname: str, ip: str = None
         )
         return
 
-    # Try to resolve IP if not provided
     if not ip:
         try:
             from router.static_leases import resolve_ip_for_mac

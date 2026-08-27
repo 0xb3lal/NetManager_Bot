@@ -60,11 +60,7 @@ def _unescape_field(s: str) -> str:
     return "".join(res)
 
 def _normalize_mac(mac: str) -> str:
-    """Normalize MAC field to canonical AA:BB:CC:DD:EE:FF.
-
-    Handles legacy corruption: \\x5c: , \\x5c , \\:, stray backslashes.
-    Only applied to MAC field, not hostnames.
-    """
+    """Normalize MAC to AA:BB:CC:DD:EE:FF, healing legacy backslash corruption."""
     if not mac:
         return mac
     import re
@@ -105,9 +101,7 @@ def _split_unescaped(s: str, delim: str):
     return parts
 
 def _parse_raw_entries(raw: str):
-    """Parse raw dhcpd_static string into list of dicts preserving raw substrings.
-    Returns list of {'raw': str, 'mac': str, 'ip': str, 'hostname': str, 'flag': str}
-    """
+    """Parse raw dhcpd_static string into dicts preserving raw substrings."""
     if not raw or not raw.strip():
         return []
     # Split on unescaped ">"
@@ -177,7 +171,7 @@ def _serialize_entry(mac: str, ip: str, hostname: str, flag: str = "0") -> str:
     return f"{mac_e}<{ip_e}<{host_e}<{flag}"
 
 def _fetch_raw_via_nvram(timeout=15):
-    """Fetch current dhcpd_static via shell nvram get (decoded)."""
+    """Fetch current dhcpd_static via nvram get."""
     from router.client import run_cmd_output_value
     out = run_cmd_output_value("nvram get dhcpd_static", timeout=timeout)
     if out is None:
@@ -193,7 +187,7 @@ def fetch_current_entries():
     return entries, raw
 
 def _push_dhcpd_static(new_raw: str, timeout=30):
-    """Submit new dhcpd_static value to /tomato.cgi with same structure as UI."""
+    """Push new dhcpd_static to /tomato.cgi."""
     headers = {"Content-Type": "text/plain;charset=UTF-8",
                "Referer": f"{ROUTER_URL}/",
                "Origin": ROUTER_URL,
@@ -233,7 +227,7 @@ def _push_dhcpd_static(new_raw: str, timeout=30):
         return False, msg
 
 def set_static_hostname_sync(mac: str, ip: str, hostname: str):
-    """Synchronous single-attempt set. Returns (success, error_msg)."""
+    """Single-attempt static lease set; returns (success, error_msg)."""
     # Validate
     if not is_valid_mac(mac):
         return False, "Invalid MAC address format"
@@ -263,9 +257,7 @@ def set_static_hostname_sync(mac: str, ip: str, hostname: str):
     return success, err
 
 async def set_static_hostname(mac: str, ip: str, hostname: str, max_attempts=3, base_delay=2):
-    """Async bounded retry wrapper. Does not hold ROUTER_LOCK while sleeping.
-    Acquires ROUTER_LOCK per attempt for the router read+write, releases before sleeping.
-    """
+    """Bounded retry for static lease set; releases ROUTER_LOCK while sleeping."""
     from state import ROUTER_LOCK
     last_err = None
     for attempt in range(1, max_attempts+1):
@@ -308,7 +300,7 @@ async def set_static_hostname(mac: str, ip: str, hostname: str, max_attempts=3, 
     return False, last_err
 
 def resolve_ip_for_mac(mac: str):
-    """Try to resolve device's current IP from state."""
+    """Resolve current IP for MAC from state cache."""
     from state import state
     mac = mac.upper()
     for ip, cached_mac in state.ip_to_mac_cache.items():

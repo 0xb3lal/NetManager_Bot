@@ -6,9 +6,7 @@ from config import *
 from utils.validators import is_valid_mac
 from router.client import run_cmd, run_cmd_output
 
-
 def _kick_non_allowed_devices():
-    """Deauthenticate non-whitelisted devices during force lockdown."""
     output = run_cmd_output(f"wl -i {WIFI_IFACE} assoclist")
     if not output:
         return
@@ -19,9 +17,7 @@ def _kick_non_allowed_devices():
             logger.info(f"Kicking non-allowed device during lockdown: {mac}")
             run_cmd(f"wl -i {WIFI_IFACE} deauthenticate {mac}")
 
-
 def enable_lockdown(force_lock=False):
-    """Apply firewall lockdown rules via iptables."""
     mode = "FORCE (Whitelist only)" if force_lock else "NORMAL (Banning list)"
     logger.info(f"Applying Firewall Lockdown: Mode={mode}")
 
@@ -36,7 +32,6 @@ def enable_lockdown(force_lock=False):
         run_cmd("iptables -A LOCKDOWN -j DROP")
         logger.debug(f"Whitelist applied: {len(state.allowed_macs)} devices allowed, others dropped.")
     else:
-        # Order matters: banned first, then PENDING (unreviewed) devices are
         # dropped unconditionally — fail-safe default until onboarding is done.
         for mac in state.banned_macs:
             if is_valid_mac(mac):
@@ -60,14 +55,10 @@ def enable_lockdown(force_lock=False):
     if force_lock:
         _kick_non_allowed_devices()
 
-
 def reapply_firewall_state():
-    """Reapply firewall rules during bot startup."""
     enable_lockdown(force_lock=state.lockdown_state)
 
-
 def ban_mac(mac, reason="manual"):
-    """Add MAC to banned list and update firewall."""
     mac = mac.upper()
     if not is_valid_mac(mac):
         logger.error(f"Invalid MAC format attempt: {mac}")
@@ -84,9 +75,7 @@ def ban_mac(mac, reason="manual"):
     else:
         logger.debug(f"Internal: {mac} already banned with reason '{reason}', nothing to change.")
 
-
 def unban_mac(mac):
-    """Remove MAC from banned list and update firewall."""
     mac = mac.upper()
     if not is_valid_mac(mac):
         return

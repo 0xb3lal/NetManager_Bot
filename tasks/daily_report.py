@@ -14,13 +14,10 @@ from config import CHANNEL_ID
 
 REPORT_TIME = time(hour=23, minute=55, tzinfo=ZoneInfo("Africa/Cairo"))
 
-
 def setup_daily_network_report_task(bot):
-    """Create and configure the daily network report task."""
 
     @tasks.loop(time=REPORT_TIME)
     async def daily_network_report():
-        """Generate daily network usage report at 23:55."""
         try:
             async with ROUTER_LOCK:
                 speed_history = await asyncio.to_thread(get_speed_history)

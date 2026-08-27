@@ -4,7 +4,6 @@ import db
 from logger import logger
 from state import state
 
-
 def setup(bot):
 
     @bot.tree.command(

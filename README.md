@@ -63,16 +63,8 @@ CHANNEL_ID=your_discord_channel_id
 
 ## Running the Bot
 
-### Local Development (Direct Router Access)
-
 ```bash
-python bot.py
-```
-
-### Production (VPS with SSH Tunnel)
-
-```bash
-python test2.py
+python main.py
 ```
 
 ## VPS Setup Guide
@@ -207,7 +199,7 @@ Wants=network-online.target
 Type=simple
 User=root
 WorkingDirectory=/root/MY-Tools/NetManager_Bot
-ExecStart=/root/.venv/bin/python /root/MY-Tools/NetManager_Bot/test2.py
+ExecStart=/root/.venv/bin/python /root/MY-Tools/NetManager_Bot/main.py
 Restart=always
 RestartSec=10
 StandardOutput=journal
@@ -257,13 +249,20 @@ The bot will now communicate with your local router and Radius server through th
 | `/rm` | Unban a specific MAC address | Admin |
 | `/blkall` | Bulk block multiple devices | Admin |
 | `/rmall` | Bulk unblock multiple devices | Admin |
-| `/list` | Show currently banned devices | Admin |
-| `/macs` | List all known MAC addresses | Admin |
-| `/balance` | Check current traffic balance | Admin |
+| `/banned_list` | Show currently banned devices | Admin |
+| `/macs` | List all known MAC addresses (supports list/edit/remove) | Admin |
+| `/balance` | Check current traffic balance (Radius) | Admin |
+| `/active` | Show active DHCP clients | Admin |
 | `/netstat` | Show network status and usage | Admin |
-| `/limit` | Change traffic threshold | Admin |
-| `/botstatus` | Check system health status | Admin |
-| `/purge` | Delete messages | Admin |
+| `/limit` | Manage per-device and default daily limits | Admin |
+| `/quota` | Manage daily extra quota | Admin |
+| `/device` | Show device details | Admin |
+| `/rename` | Rename device (router static lease) | Admin |
+| `/reboot` | Reboot router after confirmation | Admin |
+| `/tglink` | Link Telegram chat to device | Admin |
+| `/wl` | Manage whitelist (add/remove) | Admin |
+| `/pending` | List devices awaiting onboarding review | Admin |
+| `/purge` | Purge stale device data | Admin |
 
 ## ⚠️ Known Issues & Troubleshooting
 

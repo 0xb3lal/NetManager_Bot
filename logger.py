@@ -3,7 +3,6 @@ import copy
 import logging
 from logging.handlers import RotatingFileHandler
 
-# ========= LOGGING SYS =========
 log_dir = "logs"
 if not os.path.exists(log_dir):
     os.makedirs(log_dir)

@@ -19,7 +19,7 @@ from utils.traffic import (
 )
 
 def get_today_usage_by_mac():
-    """Get today's usage organized by MAC address."""
+    """Return today's usage per MAC from router stats."""
     speed_history = get_speed_history()
     daily_history = get_daily_history()
     dhcp_leases, _, _ = fetch_devlist()
@@ -34,9 +34,8 @@ def get_today_usage_by_mac():
         usage_by_mac[mac] = usage_by_mac.get(mac, 0) + bytes_to_mb(total_bytes) / 1024
     return usage_by_mac
 
-
 def apply_lockdown_for_traffic(traffic_value):
-    """Apply lockdown based on traffic threshold."""
+    """Apply lockdown if usage exceeds threshold."""
     if traffic_value < state.threshold:
         enable_lockdown(force_lock=True)
         state.lockdown_state = True
@@ -49,7 +48,7 @@ def apply_lockdown_for_traffic(traffic_value):
     return "`✅` System Normal", 0x47ff7e
 
 async def async_check_and_lock(bot_instance):
-    """Check traffic and apply lockdown asynchronously."""
+    """Async traffic check and lockdown."""
     try:
         available_traffic = await asyncio.to_thread(fetch_radius_traffic)
 

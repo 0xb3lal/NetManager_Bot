@@ -1,7 +1,7 @@
 """
 Shared mutable bot state, in one place.
 
-Every file that needs to read or write shared data (banned MACs, allowed MACs, threshold, etc.) 
+Every file that needs to read or write shared data (banned MACs, allowed MACs, threshold, etc.)
 
 does: from state import state, ROUTER_LOCK
 
@@ -20,7 +20,6 @@ import db
 from logger import logger
 
 class BotState:
-    """Holds all bot-wide mutable state."""
 
     def __init__(self):
         self.threshold       = 3.0
@@ -32,11 +31,7 @@ class BotState:
         self.ip_to_mac_cache = {}
 
     def reload_from_db(self):
-        """(Re)load all cached state from the database.
-
-        Call once at startup, right after db.init_db() has run, and again
-        in on_ready() to resync after a reconnect.
-        """
+        """Reload cached state from DB (call at startup and on reconnect)."""
         self.banned_macs     = db.get_banned()
         self.macs_list       = db.get_devices()
         self.allowed_macs    = db.get_allowed()
@@ -44,16 +39,13 @@ class BotState:
         self.threshold       = db.get_threshold()
         self.lockdown_state  = db.get_lockdown_state()
         self.ip_to_mac_cache = {}
-        
-# Single shared instance — import this, don't instantiate BotState() again.
+
 state = BotState()
 
-# Shared lock serializing all router HTTP calls — lives here (not in
 # bot_core) so command files can import it without importing the bot
 # itself.
 ROUTER_LOCK = asyncio.Lock()
 
-# Shared lock serializing read-modify-write operations on a device's extra
 # quota (usage_db.extra_quota table). Without this, two near-simultaneous
 # /quota calls (e.g. an add racing an edit, or a double-fired interaction)
 # can both read the same starting value and one update silently overwrites
@@ -63,13 +55,8 @@ QUOTA_LOCK = asyncio.Lock()
 
 ROUTER_LOCK_WAIT_TIMEOUT = 30
 
-
 async def acquire_router_lock_bounded(caller: str) -> bool:
-    """Wait up to ROUTER_LOCK_WAIT_TIMEOUT seconds for ROUTER_LOCK.
-
-    Returns True if the lock was acquired (caller MUST release it),
-    False if the wait timed out and the caller should skip this cycle.
-    """
+    """Wait up to 30s for ROUTER_LOCK; return True if acquired."""
     try:
         await asyncio.wait_for(ROUTER_LOCK.acquire(), timeout=ROUTER_LOCK_WAIT_TIMEOUT)
         return True

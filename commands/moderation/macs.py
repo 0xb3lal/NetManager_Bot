@@ -33,16 +33,11 @@ def setup(bot):
     ):
         action_value = action.value if action else "list"
 
-        # list is read-only, no admin check required for backward compat
-        # edit/remove require admin
         if action_value in ("edit", "remove"):
-            # check admin
             user = interaction.user
             if isinstance(user, discord.Member) and not user.guild_permissions.administrator:
                 await interaction.response.send_message("`❌` Only administrators can manage devices.", ephemeral=True)
                 return
-            # also allow if not Member (DM) -> check is admin? For now allow
-            # Use safe defer pattern
             try:
                 await interaction.response.defer(thinking=True)
             except Exception as e:
@@ -55,7 +50,6 @@ def setup(bot):
                 await _handle_remove(interaction, mac)
                 return
 
-        # default list
         logger.info(f"ACTION: /macs list | User: {interaction.user}")
         try:
             await interaction.response.defer()
@@ -83,7 +77,6 @@ def setup(bot):
             logger.error(f"FAILURE in /macs list: {e}")
             await interaction.followup.send("`❌` Failed to retrieve the MACs list.")
 
-
 async def _handle_edit(interaction: discord.Interaction, mac: str, new_mac: str):
     logger.info(f"ACTION: /macs edit | User: {interaction.user} | {mac} -> {new_mac}")
     if not mac or not new_mac:
@@ -106,11 +99,9 @@ async def _handle_edit(interaction: discord.Interaction, mac: str, new_mac: str)
     if db.device_exists(new):
         await interaction.followup.send(f"`❌` New MAC already exists: `{new}` — choose a different MAC or remove the existing device first.")
         return
-    # Check in-memory state conflicts (new already in any state)
     if new in state.macs_list or new in state.banned_macs or new in state.allowed_macs or new in state.pending_macs:
         await interaction.followup.send(f"`❌` New MAC already exists in state: `{new}`")
         return
-    # Check onboarding sessions
     try:
         from services.onboarding import _sessions
         if new in _sessions:
@@ -119,12 +110,10 @@ async def _handle_edit(interaction: discord.Interaction, mac: str, new_mac: str)
     except Exception:
         pass
 
-    # Snapshot router static DHCP for validation and later migration
     old_static_entry = None
     new_static_exists = False
     try:
         from router.static_leases import fetch_current_entries
-        # Use ROUTER_LOCK for read
         async with ROUTER_LOCK:
             entries, _ = await asyncio.to_thread(fetch_current_entries)
         for ent in entries:
@@ -137,15 +126,12 @@ async def _handle_edit(interaction: discord.Interaction, mac: str, new_mac: str)
             return
     except Exception as e:
         logger.warning(f"Static DHCP read failed for edit {old}->{new}: {e}")
-        # Continue — static migration is optional; if router unreachable, we can still migrate DB/state and report
         old_static_entry = None
 
-    # Snapshot state for rollback
     old_hostname = state.macs_list.get(old, db.get_hostname(old))
     was_allowed = old in state.allowed_macs
     was_banned = old in state.banned_macs
     was_pending = old in state.pending_macs
-    # ip_to_mac_cache snapshot for rollback
     ip_cache_snapshot = dict(state.ip_to_mac_cache)
     sessions_snapshot = None
     try:
@@ -154,21 +140,16 @@ async def _handle_edit(interaction: discord.Interaction, mac: str, new_mac: str)
     except Exception:
         pass
 
-    # DB migration (atomic)
     db_success = db.migrate_device_mac(old, new)
     if not db_success:
         await interaction.followup.send(f"`❌` Database migration failed for `{old}` -> `{new}` (conflict or DB error). No changes made.")
         return
 
-    # In-memory state sync (only after DB commit)
     try:
-        # macs_list
         if old in state.macs_list:
             state.macs_list[new] = state.macs_list.pop(old)
         else:
-            # Ensure new entry exists (preserve hostname)
             state.macs_list[new] = old_hostname
-        # allowed
         if was_allowed:
             try:
                 idx = state.allowed_macs.index(old)
@@ -176,19 +157,15 @@ async def _handle_edit(interaction: discord.Interaction, mac: str, new_mac: str)
             except ValueError:
                 if new not in state.allowed_macs:
                     state.allowed_macs.append(new)
-        # banned
         if was_banned:
             state.banned_macs.discard(old)
             state.banned_macs.add(new)
-        # pending
         if was_pending:
             state.pending_macs.discard(old)
             state.pending_macs.add(new)
-        # ip_to_mac_cache
         for ip, cached in list(state.ip_to_mac_cache.items()):
             if cached.upper() == old:
                 state.ip_to_mac_cache[ip] = new
-        # onboarding sessions
         try:
             from services.onboarding import _sessions
             if old in _sessions:
@@ -199,12 +176,10 @@ async def _handle_edit(interaction: discord.Interaction, mac: str, new_mac: str)
             logger.warning(f"Failed to migrate onboarding session {old}->{new}: {e}")
     except Exception as e:
         logger.error(f"State sync failed after DB migrate {old}->{new}: {e}")
-        # Rollback DB
         try:
             db.migrate_device_mac(new, old)
         except Exception as re:
             logger.error(f"Rollback DB failed {new}->{old}: {re}")
-        # Restore state from snapshot
         state.macs_list.pop(new, None)
         if old_hostname:
             state.macs_list[old] = old_hostname
@@ -233,7 +208,6 @@ async def _handle_edit(interaction: discord.Interaction, mac: str, new_mac: str)
         await interaction.followup.send(f"`❌` In-memory state sync failed, rolled back. Error: {e}")
         return
 
-    # Router static DHCP migration if old had entry
     router_success = True
     router_err = None
     if old_static_entry:
@@ -241,26 +215,19 @@ async def _handle_edit(interaction: discord.Interaction, mac: str, new_mac: str)
             from router.static_leases import fetch_current_entries, _serialize_entry, _push_dhcpd_static
             async with ROUTER_LOCK:
                 entries, _ = await asyncio.to_thread(fetch_current_entries)
-                # Build new_raw without old, with new preserving IP/host/flag
                 new_parts = []
                 found_old = False
                 for ent in entries:
                     if ent["mac"].upper() == old:
-                        # Should not happen again because we already migrated DB, but router still has old
-                        # Replace with new
                         new_parts.append(_serialize_entry(new, ent["ip"], ent["hostname"], ent["flag"]))
                         found_old = True
                     elif ent["mac"].upper() == new:
-                        # Already exists (should have been rejected) — skip duplicate
                         continue
                     else:
                         new_parts.append(_serialize_entry(ent["mac"], ent["ip"], ent["hostname"], ent["flag"]))
                 if not found_old:
-                    # Old not found in current fetch (maybe already removed), ensure new exists if old had static
-                    # Use old_static_entry snapshot to create new entry
                     new_parts.append(_serialize_entry(new, old_static_entry["ip"], old_static_entry["hostname"], old_static_entry["flag"]))
                 new_raw = ">".join(new_parts)
-                # Push
                 ok, err = await asyncio.to_thread(_push_dhcpd_static, new_raw)
                 if not ok:
                     router_success = False
@@ -271,7 +238,6 @@ async def _handle_edit(interaction: discord.Interaction, mac: str, new_mac: str)
 
     if not router_success:
         logger.error(f"Router static DHCP migration failed {old}->{new}: {router_err}, rolling back DB/state")
-        # Rollback DB
         try:
             db.migrate_device_mac(new, old)
         except Exception as re:
@@ -305,7 +271,6 @@ async def _handle_edit(interaction: discord.Interaction, mac: str, new_mac: str)
         await interaction.followup.send(f"`❌` Router update failed for `{old}` -> `{new}`: {router_err}. Rolled back, no changes made.")
         return
 
-    # Firewall reapply if state that affects firewall changed
     if was_banned or was_pending or was_allowed:
         try:
             from router.firewall import enable_lockdown
@@ -314,12 +279,10 @@ async def _handle_edit(interaction: discord.Interaction, mac: str, new_mac: str)
         except Exception as e:
             logger.warning(f"Firewall reapply after edit {old}->{new} failed: {e}")
 
-    # TTL guard to prevent immediate rediscovery of old MAC
     try:
         from router.devices import _recently_migrated, _recently_removed
         import time
         _recently_migrated[old] = time.time() + 600  # 10 min TTL
-        # Also ensure new not in removed
         _recently_removed.pop(old, None)
         _recently_removed.pop(new, None)
     except Exception:
@@ -334,7 +297,6 @@ async def _handle_edit(interaction: discord.Interaction, mac: str, new_mac: str)
     )
     logger.info(f"SUCCESS: /macs edit {old} -> {new} by {interaction.user}")
 
-
 async def _handle_remove(interaction: discord.Interaction, mac: str):
     logger.info(f"ACTION: /macs remove | User: {interaction.user} | {mac}")
     if not mac:
@@ -345,17 +307,14 @@ async def _handle_remove(interaction: discord.Interaction, mac: str):
         await interaction.followup.send(f"`❌` Invalid MAC: `{mac}`")
         return
     if not db.device_exists(target):
-        # Also check if in any state (maybe orphaned)
         if target not in state.macs_list and target not in state.banned_macs and target not in state.allowed_macs and target not in state.pending_macs:
             await interaction.followup.send(f"`❌` Device not found: `{target}`")
             return
-    # Snapshot for firewall decision
     was_banned = target in state.banned_macs
     was_allowed = target in state.allowed_macs
     was_pending = target in state.pending_macs
     was_in_macs = target in state.macs_list
 
-    # Check onboarding session
     try:
         from services.onboarding import _sessions, drop_session
         if target in _sessions:
@@ -363,11 +322,8 @@ async def _handle_remove(interaction: discord.Interaction, mac: str):
     except Exception:
         pass
 
-    # DB purge (deletes devices + satellites: banned,daily_limits,extra_quota,daily_notified,device_telegram,threshold_notified)
     db_success = db.delete_device_purge(target)
-    # Even if db returned False (no devices row), still clean state
 
-    # State cleanup
     state.macs_list.pop(target, None)
     if was_allowed:
         try:
@@ -384,14 +340,11 @@ async def _handle_remove(interaction: discord.Interaction, mac: str):
         _sessions.pop(target, None)
     except Exception:
         pass
-    # Also clean telegram thresholds? Already via delete_device_purge device_telegram, but threshold_notified also
 
-    # Router static DHCP cleanup if exists
     try:
         from router.static_leases import fetch_current_entries, _serialize_entry, _push_dhcpd_static
         async with ROUTER_LOCK:
             entries, _ = await asyncio.to_thread(fetch_current_entries)
-            # Check if target in entries
             has_static = any(ent["mac"].upper() == target for ent in entries)
             if has_static:
                 new_parts = [_serialize_entry(ent["mac"], ent["ip"], ent["hostname"], ent["flag"]) for ent in entries if ent["mac"].upper() != target]
@@ -402,7 +355,6 @@ async def _handle_remove(interaction: discord.Interaction, mac: str):
     except Exception as e:
         logger.warning(f"Static DHCP cleanup failed for remove {target}: {e}")
 
-    # Firewall reapply if needed
     if was_banned or was_allowed or was_pending:
         try:
             from router.firewall import enable_lockdown
@@ -411,7 +363,6 @@ async def _handle_remove(interaction: discord.Interaction, mac: str):
         except Exception as e:
             logger.warning(f"Firewall reapply after remove {target} failed: {e}")
 
-    # TTL guard to prevent immediate rediscovery
     try:
         from router.devices import _recently_removed, _recently_migrated
         import time

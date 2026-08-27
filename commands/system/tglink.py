@@ -7,7 +7,6 @@ from utils.discord import safe_defer
 from utils.validators import is_valid_mac
 from utils.autocomplete import all_macs_autocomplete
 
-
 def setup(bot):
 
     @bot.tree.command(

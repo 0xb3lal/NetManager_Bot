@@ -10,7 +10,6 @@ from utils.validators import is_valid_mac
 from utils.autocomplete import wl_macs_autocomplete
 from logger import logger
 
-
 async def wl(
     interaction: discord.Interaction,
     action: app_commands.Choice[str],
@@ -74,7 +73,6 @@ async def wl(
             db.set_device_allowed(mac, True)
             state.allowed_macs.append(mac)
             # Whitelisting resolves onboarding explicitly; a whitelisted-but-still-
-            # pending device would keep getting dropped by the firewall rules.
             db.set_onboarding_confirmed(mac)
             state.pending_macs.discard(mac)
             await asyncio.to_thread(
@@ -109,7 +107,6 @@ async def wl(
             await interaction.followup.send(
                 "`⚠️` Device is not in the whitelist."
             )
-
 
 def setup(bot):
     @bot.tree.command(

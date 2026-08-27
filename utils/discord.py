@@ -2,9 +2,7 @@ import discord
 
 from logger import logger
 
-
 async def safe_defer(interaction: discord.Interaction, thinking: bool = False) -> bool:
-    """Safely defer interaction with error handling."""
     if interaction.response.is_done():
         return True
     try:

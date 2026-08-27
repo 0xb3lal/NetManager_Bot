@@ -8,9 +8,7 @@ from state import ROUTER_LOCK
 from router.client import reboot_router as send_reboot_command
 from router.client import is_router_alive
 
-
 async def _wait_for_router_and_notify(channel, user_mention):
-    """Wait for router to come back online and notify user."""
     await asyncio.sleep(15)
 
     max_wait = 300
@@ -79,9 +77,7 @@ async def _wait_for_router_and_notify(channel, user_mention):
         "Router did not come back online within the expected window."
     )
 
-
 class RebootConfirmView(discord.ui.View):
-    """Confirmation view for router reboot command."""
 
     def __init__(self, requester_id):
         super().__init__(timeout=30)
@@ -235,12 +231,10 @@ class RebootConfirmView(discord.ui.View):
 
         self.stop()
 
-
 @app_commands.checks.has_permissions(administrator=True)
 async def reboot(
     interaction: discord.Interaction,
 ):
-    """Reboot the router after administrator confirmation."""
 
     try:
         await interaction.response.send_message(
@@ -261,9 +255,7 @@ async def reboot(
             f"Error showing reboot confirmation: {e}"
         )
 
-
 def setup(bot):
-    """Register the reboot command with the bot."""
     bot.tree.add_command(
         app_commands.Command(
             name="reboot",

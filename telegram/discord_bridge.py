@@ -16,15 +16,12 @@ from config import CHANNEL_ID
 
 _bot_instance = None
 
-
 def set_bot_instance(bot):
     global _bot_instance
     _bot_instance = bot
 
-
 async def notify_admin_new_telegram_user(chat_id: str, first_name: str):
-    """Post an embed to the admin Discord channel when an unlinked Telegram
-    chat messages the bot, so the admin can link it with /tglink."""
+    """Notify admin Discord channel about new unlinked Telegram user."""
     if _bot_instance is None:
         logger.warning("Discord bot instance not set — can't notify admin of new Telegram user.")
         return

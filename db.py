@@ -27,7 +27,6 @@ def _is_today_only_expired(mode: str | None, expires_on: str | None) -> bool:
 # Default daily-per-device usage cap (GB), used when a device has no custom override.
 DEFAULT_DAILY_LIMIT_GB = 1.5
 
-
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
@@ -44,12 +43,9 @@ def get_db():
     finally:
         conn.close()
 
-
 def _column_exists(conn, table: str, column: str) -> bool:
-    # Safely escape table name using brackets to prevent SQL formatting issues
     rows = conn.execute(f"PRAGMA table_info([{table}])").fetchall()
     return any(row["name"] == column for row in rows)
-
 
 def init_db():
     with get_db() as conn:
@@ -80,14 +76,12 @@ def init_db():
             );
         """)
 
-        # ---- Migration: add 'reason' column to the existing 'banned' table ----
         if not _column_exists(conn, "banned", "reason"):
             conn.execute(
                 "ALTER TABLE banned ADD COLUMN reason TEXT NOT NULL DEFAULT 'manual'"
             )
             logger.info("Migrated 'banned' table: added 'reason' column.")
 
-        # ---- Migrations: device onboarding / exemption / anomaly / last_seen ----
         # Existing rows are grandfathered as 'confirmed' via the column default,
         # so only devices discovered AFTER this migration go through onboarding.
         if not _column_exists(conn, "devices", "onboard_status"):
@@ -109,7 +103,6 @@ def init_db():
             conn.execute("ALTER TABLE devices ADD COLUMN last_seen TEXT")
             logger.info("Migrated 'devices' table: added 'last_seen' column.")
 
-        # ---- Migration: per-device daily limit persistence (persistent vs today_only) ----
         if not _column_exists(conn, "daily_limits", "mode"):
             conn.execute(
                 "ALTER TABLE daily_limits ADD COLUMN mode TEXT NOT NULL DEFAULT 'persistent' CHECK(mode IN ('persistent','today_only'))"
@@ -132,7 +125,6 @@ def init_db():
 
     logger.info("Database initialized successfully.")
 
-# ========= DEVICES =========
 def get_devices() -> dict:
     with get_db() as conn:
         rows = conn.execute("SELECT mac, hostname FROM devices").fetchall()
@@ -197,7 +189,6 @@ def add_device(mac: str, hostname: str) -> bool:
         logger.error(f"Error adding device {mac}: {e}")
         return False
 
-
 def refresh_last_seen(macs) -> None:
     """Stamp last_seen=now for every given MAC that exists in the table.
     Called from router polls — presence comes exclusively from the router."""
@@ -213,13 +204,11 @@ def refresh_last_seen(macs) -> None:
     except Exception as e:
         logger.error(f"Error refreshing last_seen stamps: {e}")
 
-
 def device_exists(mac: str) -> bool:
     mac = mac.upper()
     with get_db() as conn:
         row = conn.execute("SELECT 1 FROM devices WHERE mac = ?", (mac,)).fetchone()
     return row is not None
-
 
 def is_onboarding_pending(mac: str) -> bool:
     mac = mac.upper()
@@ -228,7 +217,6 @@ def is_onboarding_pending(mac: str) -> bool:
             "SELECT onboard_status FROM devices WHERE mac = ?", (mac,)
         ).fetchone()
     return bool(row) and row["onboard_status"] == "pending"
-
 
 def set_onboarding_confirmed(mac: str):
     mac = mac.upper()
@@ -242,7 +230,6 @@ def set_onboarding_confirmed(mac: str):
     except Exception as e:
         logger.error(f"Error confirming onboarding for {mac}: {e}")
 
-
 def get_pending_devices() -> dict:
     """Return {mac: hostname} for every device still awaiting onboarding."""
     with get_db() as conn:
@@ -250,7 +237,6 @@ def get_pending_devices() -> dict:
             "SELECT mac, hostname FROM devices WHERE onboard_status = 'pending'"
         ).fetchall()
     return {row["mac"]: row["hostname"] for row in rows}
-
 
 def get_devices_with_last_seen() -> dict:
     """Return {mac: row} for devices that have a last_seen stamp.
@@ -261,7 +247,6 @@ def get_devices_with_last_seen() -> dict:
         ).fetchall()
     return {row["mac"]: row for row in rows}
 
-
 def get_last_seen(mac: str) -> str | None:
     mac = mac.upper()
     with get_db() as conn:
@@ -270,7 +255,6 @@ def get_last_seen(mac: str) -> str | None:
         ).fetchone()
     return row["last_seen"] if row else None
 
-
 def is_exempt_from_daily_limit(mac: str) -> bool:
     mac = mac.upper()
     with get_db() as conn:
@@ -278,7 +262,6 @@ def is_exempt_from_daily_limit(mac: str) -> bool:
             "SELECT exempt_daily_limit FROM devices WHERE mac = ?", (mac,)
         ).fetchone()
     return bool(row) and bool(row["exempt_daily_limit"])
-
 
 def set_exempt_from_daily_limit(mac: str, exempt: bool):
     mac = mac.upper()
@@ -292,7 +275,6 @@ def set_exempt_from_daily_limit(mac: str, exempt: bool):
     except Exception as e:
         logger.error(f"Error setting daily-limit exemption for {mac}: {e}")
 
-
 def is_anomaly_handled(mac: str) -> bool:
     mac = mac.upper()
     with get_db() as conn:
@@ -300,7 +282,6 @@ def is_anomaly_handled(mac: str) -> bool:
             "SELECT anomaly_handled FROM devices WHERE mac = ?", (mac,)
         ).fetchone()
     return bool(row) and bool(row["anomaly_handled"])
-
 
 def mark_anomaly_handled(mac: str):
     mac = mac.upper()
@@ -312,7 +293,6 @@ def mark_anomaly_handled(mac: str):
     except Exception as e:
         logger.error(f"Error marking anomaly handled for {mac}: {e}")
 
-
 def delete_device_purge(mac: str) -> bool:
     """Delete a device and every MAC-keyed satellite row so no ghost state
     survives the purge. Returns True when a devices row was removed."""
@@ -321,8 +301,6 @@ def delete_device_purge(mac: str) -> bool:
         with get_db() as conn:
             conn.execute("DELETE FROM devices WHERE mac = ?", (mac,))
             deleted = conn.execute("SELECT changes() as c").fetchone()["c"]
-            # Satellite tables keyed by MAC — cleaned regardless of whether
-            # the devices row existed, to avoid resurrecting ghosts.
             for table in (
                 "banned", "daily_limits", "extra_quota",
                 "daily_notified", "device_telegram", "threshold_notified",
@@ -385,26 +363,20 @@ def migrate_device_mac(old_mac: str, new_mac: str) -> bool:
         return False
     try:
         with get_db() as conn:
-            # Conflict checks inside transaction
             exists_old = conn.execute("SELECT 1 FROM devices WHERE mac=?", (old_mac,)).fetchone()
             if not exists_old:
                 return False
             exists_new = conn.execute("SELECT 1 FROM devices WHERE mac=?", (new_mac,)).fetchone()
             if exists_new:
                 return False
-            # Also check satellites where new already exists would cause PK conflict on UPDATE
-            # For daily_limits etc., check new exists
             for tbl in ("daily_limits", "extra_quota", "banned", "daily_notified", "device_telegram", "threshold_notified"):
                 try:
                     row_new = conn.execute(f"SELECT 1 FROM {tbl} WHERE mac=?", (new_mac,)).fetchone()
                     if row_new:
                         return False
                 except Exception:
-                    # Table may not exist yet (e.g., device_telegram)
                     pass
-            # Migrate devices PK
             conn.execute("UPDATE devices SET mac=? WHERE mac=?", (new_mac, old_mac))
-            # Migrate satellites
             for tbl in ("daily_limits", "extra_quota", "banned", "daily_notified", "device_telegram", "threshold_notified"):
                 try:
                     conn.execute(f"UPDATE {tbl} SET mac=? WHERE mac=?", (new_mac, old_mac))
@@ -419,7 +391,6 @@ def migrate_device_mac(old_mac: str, new_mac: str) -> bool:
         logger.error(f"Error migrating MAC {old_mac}->{new_mac}: {e}")
         return False
 
-# ========= BANNED =========
 def get_banned() -> set:
     with get_db() as conn:
         rows = conn.execute("SELECT mac FROM banned").fetchall()
@@ -477,7 +448,6 @@ def unban_device(mac: str) -> bool:
         logger.error(f"Error unbanning device {mac}: {e}")
         return False
 
-# ========= SETTINGS =========
 def get_threshold() -> float:
     try:
         with get_db() as conn:
@@ -522,7 +492,6 @@ def set_lockdown_state(state: bool):
     except Exception as e:
         logger.error(f"Error saving lockdown state: {e}")
 
-# ========= DAILY USAGE LIMITS =========
 def get_daily_default_limit() -> float:
     try:
         with get_db() as conn:
@@ -643,7 +612,6 @@ def clear_expired_today_only_limits() -> int:
     try:
         today = _today_cairo_str()
         with get_db() as conn:
-            # Count first
             rows = conn.execute(
                 "SELECT mac, expires_on FROM daily_limits WHERE mode='today_only'"
             ).fetchall()
@@ -653,7 +621,6 @@ def clear_expired_today_only_limits() -> int:
             conn.execute(
                 "DELETE FROM daily_limits WHERE mode='today_only' AND expires_on != ?", (today,)
             )
-            # Also clean any today_only with NULL expires_on (should not happen) — keep them
             deleted = conn.execute("SELECT changes() as c").fetchone()["c"]
         if deleted:
             logger.info(f"Cleared {deleted} expired today_only daily limit(s) (today={today}).")
@@ -674,7 +641,6 @@ def clear_all_device_daily_limits() -> int:
         logger.error(f"Error clearing daily limit overrides: {e}")
         return 0
 
-# ========= DAILY NOTIFICATION TRACKING =========
 def was_notified_today(mac: str) -> bool:
     mac = mac.upper()
     with get_db() as conn:

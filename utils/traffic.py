@@ -1,7 +1,4 @@
 def parse_traffic_to_gb(traffic_str):
-    """
-    Parse traffic string (e.g., '1.5 GB', '512 MB') to GB value.
-    """
     if not traffic_str:
         return 0.0
 
@@ -25,18 +22,10 @@ def parse_traffic_to_gb(traffic_str):
 
     return value
 
-
 def bytes_to_mb(value):
-    """
-    Convert bytes to megabytes.
-    """
     return value / (1024 * 1024)
 
-
 def format_data_size(value_gb):
-    """
-    Format GB value to human-readable string (GB or MB).
-    """
     if value_gb >= 1:
         return f"{value_gb:.2f} GB"
 

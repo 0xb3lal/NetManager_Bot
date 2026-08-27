@@ -2,13 +2,10 @@ from discord.ext import tasks
 from logger import logger
 from services.traffic import async_check_and_lock
 
-
 def setup_traffic_check_task(bot):
-    """Create and configure the hourly traffic check task."""
 
     @tasks.loop(hours=1.0)
     async def traffic_check_task():
-        """Hourly traffic check against Radius."""
         logger.info("Starting scheduled traffic check...")
 
         try:

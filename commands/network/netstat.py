@@ -21,7 +21,6 @@ from router.traffic import (
 
 from router.devices import fetch_devlist
 
-
 def setup(bot):
 
     @bot.tree.command(
@@ -81,7 +80,6 @@ def setup(bot):
                     fetch_devlist
                 )
 
-
             devices_info = {
                 lease[2].upper(): {
                     "name": lease[0],
@@ -90,17 +88,14 @@ def setup(bot):
                 for lease in dhcp_leases
             }
 
-
             combined_usage = get_today_combined(
                 speed_history,
                 daily_history
             )
 
-
             if view_value == "daily_limit":
 
                 combined_data = []
-
 
                 for mac, info in devices_info.items():
 
@@ -113,11 +108,9 @@ def setup(bot):
                         total_bytes
                     ) / 1024
 
-
                     effective_limit = db.get_effective_daily_limit(
                         mac
                     )
-
 
                     combined_data.append({
                         "name": state.macs_list.get(
@@ -129,7 +122,6 @@ def setup(bot):
                         "over": usage_gb >= effective_limit
                     })
 
-
                 combined_data.sort(
                     key=lambda x: (
                         x["usage_gb"] / x["limit_gb"]
@@ -138,7 +130,6 @@ def setup(bot):
                     ),
                     reverse=True
                 )
-
 
                 if combined_data:
 
@@ -159,13 +150,11 @@ def setup(bot):
                             f"{format_data_size(dev['limit_gb'])}`"
                         )
 
-
                     embed = discord.Embed(
                         title=f"`📡` Daily Limit Status ({len(combined_data)} Devices)",
                         description="\n".join(lines),
                         color=0x2ecc71
                     )
-
 
                 else:
 
@@ -174,18 +163,14 @@ def setup(bot):
                         color=0x95a5a6
                     )
 
-
                 await interaction.followup.send(
                     embed=embed
                 )
 
                 return
 
-
-
             combined_data = []
             total_traffic_mb = 0.0
-
 
             for ip, total_bytes in combined_usage.items():
 
@@ -193,10 +178,8 @@ def setup(bot):
                     total_bytes
                 )
 
-
                 if usage_mb < 0.1:
                     continue
-
 
                 target_mac = next(
                     (
@@ -207,15 +190,12 @@ def setup(bot):
                     None
                 )
 
-
                 if not target_mac:
                     continue
-
 
                 total_traffic_mb += usage_mb
 
                 raw_name = devices_info[target_mac]["name"]
-
 
                 combined_data.append({
                     "name": state.macs_list.get(
@@ -225,12 +205,10 @@ def setup(bot):
                     "usage": usage_mb
                 })
 
-
             combined_data.sort(
                 key=lambda x: x["usage"],
                 reverse=True
             )
-
 
             if combined_data:
 
@@ -244,13 +222,11 @@ def setup(bot):
                         else f"{int(dev['usage'])}MB"
                     )
 
-
                     lines.append(
                         f"`📱` "
                         f"`{dev['name'][:12].ljust(12)} | "
                         f"📊{u_str.rjust(6)}`"
                     )
-
 
                 embed = discord.Embed(
                     title=f"`📡` Network Usage ({len(combined_data)} Devices)",
@@ -258,11 +234,9 @@ def setup(bot):
                     color=0x2ecc71
                 )
 
-
                 embed.set_footer(
                     text=f"Total Network Load: {total_traffic_mb/1024:.2f} GB"
                 )
-
 
             else:
 
@@ -271,16 +245,13 @@ def setup(bot):
                     color=0x95a5a6
                 )
 
-
             await interaction.followup.send(
                 embed=embed
             )
 
-
             logger.info(
                 f"SUCCESS: /netstat | User: {interaction.user}"
             )
-
 
         except Exception as e:
 

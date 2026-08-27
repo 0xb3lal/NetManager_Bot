@@ -9,10 +9,9 @@ from services.traffic import get_today_usage_by_mac
 from utils.traffic import format_data_size
 from telegram.commands.register import command
 
-
 @command("/usage")
 async def handle_usage_command(chat_id: str, first_name: str = ""):
-    """Reply to /usage with a clear breakdown of today's usage for the sender's device."""
+    """Reply to /usage with today's usage breakdown."""
     mac = telegram_db.get_mac_by_chat_id(chat_id)
     if not mac:
         await telegram_client.send_message(

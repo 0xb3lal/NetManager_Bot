@@ -5,7 +5,6 @@ import db
 from logger import logger
 from utils.discord import safe_defer
 
-
 def setup(bot):
 
     @bot.tree.command(

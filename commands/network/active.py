@@ -5,7 +5,6 @@ from state import state, ROUTER_LOCK
 from utils.discord import safe_defer
 from router.devices import fetch_devlist
 
-
 def setup(bot):
 
     @bot.tree.command(
@@ -97,7 +96,6 @@ def setup(bot):
                     }
                 )
 
-
             def get_signal_val(sig_text):
 
                 try:
@@ -111,7 +109,6 @@ def setup(bot):
                 ):
                     return 0
 
-
             combined_data.sort(
                 key=lambda x: (
                     x["online_sort"],
@@ -119,7 +116,6 @@ def setup(bot):
                 ),
                 reverse=True
             )
-
 
             online = [
                 d for d in combined_data
@@ -135,7 +131,6 @@ def setup(bot):
                 d for d in combined_data
                 if d["icon"] == "⛔"
             ]
-
 
             if combined_data:
 

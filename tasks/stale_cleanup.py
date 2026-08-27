@@ -18,11 +18,8 @@ STALE_RETRY_INTERVAL = 45 * 60  # 45 minutes
 STALE_MAX_ATTEMPTS = 3
 _stale_retry_running = False
 
-
 async def _run_stale_cleanup_once():
-    """Execute one stale cleanup scan+purge. Returns removed list or raises on failure.
-    Returns None if lock busy (not a failure, just skip).
-    """
+    """Scan and purge devices unseen for threshold; None if lock busy."""
     if not await acquire_router_lock_bounded("Stale device cleanup"):
         return None  # lock busy, not a failure
     removed = []
@@ -73,9 +70,7 @@ async def _run_stale_cleanup_once():
         except Exception:
             pass
 
-
 async def _send_stale_success(channel, removed):
-    """Send success notification once, with bounded retry."""
     try:
         if not removed:
             logger.info("Stale device cleanup completed: nothing to remove.")
@@ -119,9 +114,7 @@ async def _send_stale_success(channel, removed):
         logger.error(f"Error sending stale success notification: {e}")
         return False
 
-
 async def _send_stale_failure(channel, last_error):
-    """Send final failure notification once."""
     try:
         if not channel:
             logger.error(f"Stale cleanup failed after {STALE_MAX_ATTEMPTS} attempts: {last_error} (no channel)")
@@ -147,7 +140,6 @@ async def _send_stale_failure(channel, last_error):
         logger.error("Failed to send stale cleanup failure notification")
     except Exception as e:
         logger.error(f"Error sending stale failure notification: {e}")
-
 
 async def _retry_stale_cleanup(channel, first_error):
     global _stale_retry_running
@@ -176,13 +168,10 @@ async def _retry_stale_cleanup(channel, first_error):
     finally:
         _stale_retry_running = False
 
-
 def setup_stale_cleanup_task(bot):
-    """Create and configure the stale-device cleanup task."""
 
     @tasks.loop(hours=24 * STALE_DEVICE_CHECK_INTERVAL_DAYS)
     async def stale_cleanup_task():
-        """Delete devices not seen by the router for the configured threshold."""
         global _stale_retry_running
         logger.info("Stale device cleanup TRIGGERED — scanning device table...")
         channel = bot.get_channel(CHANNEL_ID)

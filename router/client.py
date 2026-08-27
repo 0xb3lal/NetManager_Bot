@@ -3,7 +3,6 @@ from logger import logger
 from config import *
 
 def run_cmd(cmd, _retry=True):
-    """Execute command on router and return success status."""
     data = f"action=execute&command={cmd}\n&_http_id=TIDe5b1505eeac7f67f"
     try:
         logger.debug(f"Sending Command to Router: {cmd}")
@@ -25,13 +24,7 @@ def run_cmd(cmd, _retry=True):
         return False
 
 def run_cmd_output(cmd, timeout=15):
-    """Execute command on router and return output.
-
-    NOTE: Tomato /shell.cgi wraps output as `cmdresult = '...';` with JS escapes.
-    This function preserves historic raw behavior for callers that already handle
-    the wrapper (e.g. firewall wl assoclist regex). For nvram/raw values use
-    `parse_shell_cgi_result()` or `run_cmd_output_value()`.
-    """
+    """Execute command on router and return raw shell.cgi output (JS-wrapped)."""
     data = f"action=execute&command={cmd}\n&_http_id=TIDe5b1505eeac7f67f"
     try:
         response = ROUTER_SESSION.post(f"{ROUTER_URL}/shell.cgi", data=data, timeout=timeout)
@@ -46,13 +39,8 @@ def run_cmd_output(cmd, timeout=15):
         logger.error(f"Unexpected error in run_cmd_output: {e}")
         return None
 
-
 def _decode_js_escapes(s: str) -> str:
-    r"""Decode Tomato shell.cgi JS-escaped string.
-
-    Handles: \x5c -> \, \x27 -> ', \x22 -> \", \\ -> \, \n/\r/\t,
-    \' / \", and generic \xNN hex. Does NOT use eval().
-    """
+    """Decode Tomato shell.cgi JS escapes (\\xNN, \\n, etc.)."""
     res = []
     i = 0
     n = len(s)
@@ -88,14 +76,8 @@ def _decode_js_escapes(s: str) -> str:
         i += 1
     return "".join(res)
 
-
 def parse_shell_cgi_result(text: str) -> str:
-    r"""Extract and JS-decode the actual command output from shell.cgi response.
-
-    Tomato returns e.g.  cmdresult = 'D6\\x5c:E8...';\n
-    This returns the decoded inner value.
-    If no wrapper found, returns text JS-decoded as best-effort fallback.
-    """
+    """Extract and decode cmdresult payload from shell.cgi response."""
     if text is None:
         return None
     import re
@@ -109,16 +91,13 @@ def parse_shell_cgi_result(text: str) -> str:
         return _decode_js_escapes(inner)
     return _decode_js_escapes(text)
 
-
 def run_cmd_output_value(cmd, timeout=15):
-    """Execute command and return decoded actual stdout (wrapper removed)."""
     raw = run_cmd_output(cmd, timeout=timeout)
     if raw is None:
         return None
     return parse_shell_cgi_result(raw)
 
 def reboot_router():
-    """Send reboot command to router."""
     data = "action=execute&command=reboot\n&_http_id=TIDe5b1505eeac7f67f"
     try:
         response = ROUTER_SESSION.post(f"{ROUTER_URL}/shell.cgi", data=data, timeout=10)
@@ -135,11 +114,7 @@ def reboot_router():
         return False
 
 def ping_router(timeout=10):
-    """Send a lightweight 'true' shell command to check router responsiveness.
-
-    Returns the requests.Response on success. Raises the underlying requests
-    exception on failure so each caller can keep its own error handling/logging.
-    """
+    """Probe router liveness via a lightweight 'true' command."""
     return ROUTER_SESSION.post(
         f"{ROUTER_URL}/shell.cgi",
         data="action=execute&command=true\n&_http_id=TIDe5b1505eeac7f67f",
@@ -147,7 +122,6 @@ def ping_router(timeout=10):
     )
 
 def is_router_alive():
-    """Check if router is responding."""
     try:
         r = ping_router(timeout=5)
         return r.status_code == 200

@@ -4,20 +4,17 @@ import telegram.db as telegram_db
 from telegram.discord_bridge import notify_admin_new_telegram_user
 from telegram.commands.register import COMMAND_HANDLERS
 
-# Import every command module so its @command(...) decorator runs and
 # registers itself into COMMAND_HANDLERS. To add a new command later:
 # create commands/<name>.py with an @command("/name") handler, and add
 # ONE import line below. Nothing else in this file needs to change.
 import telegram.commands.usage
 import telegram.commands.start
 
-# In-memory guard so a not-yet-linked chat doesn't spam the admin channel
 # on every message — one notification per chat per process run is enough.
 _already_notified_unlinked = set()
 
-
 async def handle_update(update: dict):
-    """Route a single incoming Telegram update to the right command handler."""
+    """Route Telegram update to command handler."""
     message = update.get("message")
     if not message or "text" not in message:
         return
@@ -29,7 +26,6 @@ async def handle_update(update: dict):
     if not text:
         return
 
-    # New, unlinked user reaching out — let the admin know on Discord so
     # they can /tglink this chat to a device.
     mac = telegram_db.get_mac_by_chat_id(chat_id)
     if not mac and chat_id not in _already_notified_unlinked:
@@ -48,5 +44,4 @@ async def handle_update(update: dict):
         await handler(chat_id, first_name)
     else:
         logger.info(f"No handler registered for Telegram command: {command_name}")
-        # Unknown commands are otherwise ignored on purpose — no need to
         # spam replies for random messages sent to the bot.

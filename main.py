@@ -21,17 +21,13 @@ from config import (
     DISCORD_TOKEN,
     GUILD_ID,
 )
-# DATABASE & STATE INITIALIZATION
 
 db.init_db()
 usage_db.init_usage_tables()
 telegram_db.init_telegram_tables()
 state.reload_from_db()
 
-# BOT CLIENT
-
 class MyBot(discord.Client):
-    """Main Discord bot client with command tree."""
 
     def __init__(self):
         super().__init__(
@@ -89,8 +85,6 @@ class MyBot(discord.Client):
         if not stale_cleanup_task.is_running():
             stale_cleanup_task.start()
 
-        # Telegram command menu + incoming-message polling.
-        # Independent of Discord Gateway state, so setup_hook (called once
         # per process before on_ready) is the right place — no need to
         # wait for guild/cache readiness like on_ready-dependent logic.
         discord_bridge.set_bot_instance(self)
@@ -122,10 +116,8 @@ class MyBot(discord.Client):
         async with ROUTER_LOCK:
             await asyncio.to_thread(reapply_firewall_state)
 
-# MAIN ENTRY POINT
-
 async def main():
-    """Main bot entry point with automatic restart on fatal errors."""
+    """Run bot with auto-restart and exponential backoff."""
     retry_delay = 5
     max_retry_delay = 300  # cap backoff at 5 minutes
     attempt = 0

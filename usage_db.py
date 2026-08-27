@@ -13,7 +13,6 @@ def init_usage_tables():
         """)
     logger.info("Usage quota table initialized.")
 
-
 def get_extra_quota(mac: str) -> float:
     mac = mac.upper()
     try:
@@ -26,10 +25,8 @@ def get_extra_quota(mac: str) -> float:
         logger.error(f"Error loading extra quota for {mac}: {e}")
         return 0.0
 
-
 def add_extra_quota(mac: str, amount_gb: float) -> float | None:
-    """Add (or subtract) to a device's extra quota for today.
-    Returns the new total extra, or None when the write failed."""
+    """Add extra quota delta for device; returns new total or None on failure."""
     mac = mac.upper()
     try:
         with get_db() as conn:
@@ -49,8 +46,7 @@ def add_extra_quota(mac: str, amount_gb: float) -> float | None:
         return None
 
 def set_extra_quota(mac: str, amount_gb: float) -> float | None:
-    """Overwrite a device's extra quota for today with an absolute value.
-    Returns the new value, or None when the write failed."""
+    """Set extra quota absolute value; returns value or None on failure."""
     mac = mac.upper()
     try:
         with get_db() as conn:
@@ -63,7 +59,6 @@ def set_extra_quota(mac: str, amount_gb: float) -> float | None:
     except Exception as e:
         logger.error(f"Error setting extra quota for {mac}: {e}")
         return None
-    
 
 def clear_all_extra_quota() -> int:
     try:

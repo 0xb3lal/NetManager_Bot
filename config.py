@@ -30,11 +30,9 @@ GUILD_ID = discord.Object(id=1475047474832867338)
 CHANNEL_ID = int(os.getenv("CHANNEL_ID"))
 WIFI_IFACE = os.getenv("WIFI_IFACE", "eth1")
 
-# Unknown-hostname traffic anomaly check
 UNKNOWN_HOSTNAME_TRAFFIC_THRESHOLD_MB = float(os.getenv("UNKNOWN_HOSTNAME_TRAFFIC_THRESHOLD_MB", "100"))
 ANOMALY_CHECK_INTERVAL_MINUTES = int(os.getenv("ANOMALY_CHECK_INTERVAL_MINUTES", "10"))
 
-# Stale device cleanup (devices unseen by the router for this long are removed)
 STALE_DEVICE_CHECK_INTERVAL_DAYS = int(os.getenv("STALE_DEVICE_CHECK_INTERVAL_DAYS", "3"))
 STALE_DEVICE_THRESHOLD_DAYS = int(os.getenv("STALE_DEVICE_THRESHOLD_DAYS", "3"))
 
@@ -51,7 +49,6 @@ if _invalid_limits:
     # and a zero interval crashes task registration at startup.
     raise RuntimeError(f"Invalid configuration: {'; '.join(_invalid_limits)}")
 
-# URL validation for router/radius endpoints
 from urllib.parse import urlparse as _urlparse
 for _name, _val in (("ROUTER_URL", ROUTER_URL), ("RADIUS_URL", RADIUS_URL)):
     _parsed = _urlparse(_val)
@@ -61,9 +58,7 @@ for _name, _val in (("ROUTER_URL", ROUTER_URL), ("RADIUS_URL", RADIUS_URL)):
 ROUTER_URL = ROUTER_URL.rstrip("/")
 RADIUS_URL = RADIUS_URL.rstrip("/")
 
-# Telegram bot token and chat ID for notifications
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
-# GLOBAL SESSIONS
 urllib3.disable_warnings()
 
 ROUTER_SESSION = requests.Session()

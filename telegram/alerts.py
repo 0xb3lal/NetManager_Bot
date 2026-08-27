@@ -14,15 +14,8 @@ _THRESHOLD_STYLE = {
     100: ("🚫", "Limit Reached"),
 }
 
-
 async def check_and_send_threshold_alerts(mac: str, device_name: str, usage_gb: float, effective_limit: float):
-    """Send a Telegram alert the first time a device crosses each usage threshold today.
-
-    Note: the threshold is only marked as "notified" after a CONFIRMED
-    successful send. If sending fails (Telegram down, network hiccup, etc.),
-    the threshold stays unmarked so it's retried on the next scheduled check
-    instead of being silently skipped forever.
-    """
+    """Alert on Telegram at 25/50/75/100%; mark notified only after confirmed send."""
     chat_id = telegram_db.get_device_chat_id(mac)
     if not chat_id:
         return
@@ -46,9 +39,8 @@ async def check_and_send_threshold_alerts(mac: str, device_name: str, usage_gb: 
                 f"will retry on next check."
             )
 
-
 def _build_alert_text(mac: str, device_name: str, usage_gb: float, effective_limit: float, threshold: int) -> str:
-    """Simple, easy-to-read alert — same plain style as the /usage command."""
+    """Build usage alert text for Telegram."""
     remaining_gb = max(effective_limit - usage_gb, 0)
     icon, header = _THRESHOLD_STYLE.get(threshold, ("📶", "Usage Alert"))
 

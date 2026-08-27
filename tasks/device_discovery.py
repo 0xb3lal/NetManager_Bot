@@ -7,13 +7,10 @@ from logger import logger
 from router.devices import fetch_devlist_and_discover
 from state import ROUTER_LOCK
 
-
 def setup_device_discovery_task(bot):
-    """Create and configure the device discovery task."""
 
     @tasks.loop(minutes=5.0)
     async def device_discovery_task():
-        """Periodically discover new network devices."""
 
         if ROUTER_LOCK.locked():
             logger.debug(
@@ -21,7 +18,6 @@ def setup_device_discovery_task(bot):
             )
             return
 
-        # Bounded retry: one immediate retry for transient router failures
         for attempt in range(1, 3):
             try:
                 async with ROUTER_LOCK:
@@ -40,7 +36,6 @@ def setup_device_discovery_task(bot):
                     logger.warning(
                         f"Device discovery failed (attempt 1/2): {e}, retrying in 2s"
                     )
-                    # Release lock before sleep (exited async with), then sleep outside
                     await asyncio.sleep(2)
                     continue
                 logger.exception(

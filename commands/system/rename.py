@@ -40,12 +40,10 @@ def setup(bot):
             if not db.device_exists(mac_upper):
                 await interaction.followup.send("`❌` Device not found in database.")
                 return
-            # Hostname validation
             if not is_valid_hostname(name.strip()):
                 await interaction.followup.send("`❌` Invalid hostname. Use 1-32 alphanumeric/hyphen characters, must start/end with alnum.")
                 return
             name = name.strip()
-            # Resolve IP with strict priority: explicit IP > active DHCP > static DHCP > ask user
             resolved_ip = None
             explicit_ip = ip.strip() if isinstance(ip, str) and ip.strip() else None
             if explicit_ip:
@@ -54,12 +52,10 @@ def setup(bot):
                     return
                 resolved_ip = explicit_ip
             else:
-                # STEP 1 — Active DHCP leases (authoritative current IP)
                 try:
                     async with ROUTER_LOCK:
                         dhcp_leases, _, _ = await asyncio.to_thread(fetch_devlist)
                     for lease in dhcp_leases:
-                        # lease format: [hostname, ip, mac, ...]
                         try:
                             lease_mac = str(lease[2]).strip().upper()
                             lease_ip = str(lease[1]).strip() if lease[1] else ""
@@ -72,7 +68,6 @@ def setup(bot):
                     raise
                 except Exception as e:
                     logger.warning(f"Active DHCP lookup failed for {mac_upper}: {e}")
-                # STEP 2 — Static DHCP leases (fallback)
                 if not resolved_ip:
                     try:
                         from router.static_leases import fetch_current_entries
@@ -98,11 +93,6 @@ def setup(bot):
                 )
                 return
 
-            # Call router-native writer with bounded retry (3 attempts) without holding lock during sleeps
-            # We need to not hold ROUTER_LOCK while sleeping, so call async helper which handles retries internally without lock
-            # The helper will do fetch+push each attempt; we should ensure lock discipline: acquire per attempt inside helper
-            # Here we just call it; it handles its own retries
-            # But we need to ensure discovery is under lock after success
             success, err = await set_static_hostname(mac_upper, resolved_ip, name)
 
             if not success:
@@ -116,13 +106,11 @@ def setup(bot):
                 await interaction.followup.send(embed=embed)
                 return
 
-            # Success: immediately sync DB + state so /macs shows new hostname without waiting for DHCP renewal
             try:
                 db.update_hostname(mac_upper, name)
                 state.macs_list[mac_upper] = name
             except Exception as e:
                 logger.warning(f"Failed to sync DB/state hostname after rename for {mac_upper}: {e}")
-            # Trigger immediate discovery resync to pull router truth (ip_to_mac_cache/last_seen) — does not overwrite custom hostname (protected in fetch_devlist_and_discover)
             try:
                 async with ROUTER_LOCK:
                     await asyncio.to_thread(fetch_devlist)

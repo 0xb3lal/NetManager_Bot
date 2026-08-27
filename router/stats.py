@@ -5,7 +5,6 @@ from config import (
 )
 
 def reset_ip_traffic_stats():
-    """Reset IP traffic statistics on router."""
     headers = {"Content-Type": "application/x-www-form-urlencoded"}
     data = (
         "_nextpage=%2F%23admin-iptraffic.asp&_service=cstatsnew-restart&cstats_enable=1"
@@ -24,9 +23,7 @@ def reset_ip_traffic_stats():
         logger.error(f"Error resetting IP Traffic stats: {e}")
         return False
 
-
 def reset_bandwidth_stats():
-    """Reset bandwidth statistics on router."""
     headers = {"Content-Type": "application/x-www-form-urlencoded"}
     data = (
         "_nextpage=%2F%23admin-bwm.asp&_service=rstatsnew-restart&rstats_enable=1"

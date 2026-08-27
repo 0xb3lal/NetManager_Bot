@@ -14,7 +14,6 @@ from services.limits import (
 
 from services.radius import async_check_and_lock
 
-
 def setup(bot):
 
     @bot.tree.command(
@@ -90,7 +89,6 @@ def setup(bot):
                 await interaction.followup.send(embed=embed)
                 return
 
-
             if scope_value == "reset":
 
                 cleared_count = db.clear_all_device_daily_limits()
@@ -119,13 +117,11 @@ def setup(bot):
                 await recheck_default_limit_devices(bot)
                 return
 
-
             if value is None:
                 await interaction.followup.send(
                     "`⚠️` Please provide a value."
                 )
                 return
-
 
             value_gb = value / 1024 if unit_value == "MB" else value
 
@@ -175,14 +171,12 @@ def setup(bot):
                     )
                 )
 
-
                 await recheck_device_after_limit_change(
                     bot,
                     mac_upper
                 )
 
                 return
-
 
             if scope_value == "daily_default":
 
@@ -195,7 +189,6 @@ def setup(bot):
                 logger.info(
                     f"User {interaction.user} updated daily default limit to {value_gb}"
                 )
-
 
                 await interaction.followup.send(
                     embed=discord.Embed(
@@ -210,13 +203,11 @@ def setup(bot):
                     )
                 )
 
-
                 await recheck_default_limit_devices(
                     bot
                 )
 
                 return
-
 
             old_limit = state.threshold
 
@@ -226,11 +217,9 @@ def setup(bot):
                 value_gb
             )
 
-
             logger.info(
                 f"User {interaction.user} updated main threshold to {value_gb}"
             )
-
 
             await interaction.followup.send(
                 embed=discord.Embed(
@@ -245,11 +234,9 @@ def setup(bot):
                 )
             )
 
-
             await async_check_and_lock(
                 bot
             )
-
 
         except Exception as e:
 

@@ -5,7 +5,6 @@ from state import state
 from utils.discord import safe_defer
 from commands.views.bulk_unblock import BulkUnblockView
 
-
 def setup(bot):
 
     @bot.tree.command(

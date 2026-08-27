@@ -4,9 +4,7 @@ from discord import app_commands
 from state import state
 from logger import logger
 
-
 async def mac_autocomplete(interaction: discord.Interaction, current: str):
-    """Autocomplete for non-banned MACs."""
     try:
         macs_list_snapshot = dict(state.macs_list)
         banned_macs_snapshot = set(state.banned_macs)
@@ -24,9 +22,7 @@ async def mac_autocomplete(interaction: discord.Interaction, current: str):
         logger.error(f"Error in mac_autocomplete: {e}")
         return []
 
-
 async def banned_macs_autocomplete(interaction: discord.Interaction, current: str):
-    """Autocomplete for banned MACs."""
     try:
         macs_list_snapshot = dict(state.macs_list)
         banned_macs_snapshot = set(state.banned_macs)
@@ -43,9 +39,7 @@ async def banned_macs_autocomplete(interaction: discord.Interaction, current: st
         logger.error(f"Error in banned_macs_autocomplete: {e}")
         return []
 
-
 async def all_macs_autocomplete(interaction: discord.Interaction, current: str):
-    """Autocomplete for all known MACs."""
     try:
         macs_list_snapshot = dict(state.macs_list)
         current_lower = current.lower()
@@ -61,9 +55,7 @@ async def all_macs_autocomplete(interaction: discord.Interaction, current: str):
         logger.error(f"Error in all_macs_autocomplete: {e}")
         return []
 
-
 async def wl_macs_autocomplete(interaction: discord.Interaction, current: str):
-    """Autocomplete for whitelist MACs (context-aware)."""
     try:
         action_value = getattr(interaction.namespace, "action", None)
 

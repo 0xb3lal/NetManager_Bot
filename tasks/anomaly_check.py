@@ -17,17 +17,12 @@ from utils.traffic import format_data_size
 
 ANOMALY_PROMPT_TIMEOUT = 1800  # seconds the Recognized/Suspicious question waits
 
-
 def setup_anomaly_check_task(bot):
-    """Create and configure the unknown-hostname traffic anomaly task."""
+    """Create unknown-hostname traffic anomaly task."""
 
     @tasks.loop(minutes=ANOMALY_CHECK_INTERVAL_MINUTES)
     async def anomaly_check_task():
-        """Flag unknown-hostname devices whose traffic crosses the threshold.
-
-        Default action while awaiting an admin reply: BLOCK immediately;
-        unblock only if the device is confirmed as recognized/allowed.
-        """
+        """Block and prompt for unknown-hostname devices exceeding traffic threshold."""
         logger.info("Unknown-hostname anomaly check TRIGGERED — starting scan...")
 
         threshold_gb = UNKNOWN_HOSTNAME_TRAFFIC_THRESHOLD_MB / 1024
@@ -111,7 +106,6 @@ def setup_anomaly_check_task(bot):
         except Exception as e:
             logger.error(f"Error in anomaly_check_task: {e}")
 
-
     @anomaly_check_task.before_loop
     async def before_anomaly_check():
         await bot.wait_until_ready()
@@ -122,7 +116,6 @@ def setup_anomaly_check_task(bot):
         )
 
     return anomaly_check_task
-
 
 def _anomaly_embed(mac: str, usage_gb: float, threshold_gb: float) -> discord.Embed:
     embed = discord.Embed(
@@ -140,9 +133,8 @@ def _anomaly_embed(mac: str, usage_gb: float, threshold_gb: float) -> discord.Em
     embed.set_footer(text="Device blocked pending your review.")
     return embed
 
-
 class AnomalyView(discord.ui.View):
-    """Recognized -> unblock + whitelist. Suspicious -> stays blocked."""
+    """Anomaly prompt: Recognized -> whitelist+unblock, Suspicious -> stay blocked."""
 
     def __init__(self, mac: str):
         super().__init__(timeout=ANOMALY_PROMPT_TIMEOUT)

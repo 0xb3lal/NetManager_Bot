@@ -3,12 +3,10 @@ from discord import app_commands
 
 from logger import logger
 
-
 purge_group = app_commands.Group(
     name="purge",
     description="Commands to delete messages"
 )
-
 
 @purge_group.command(
     name="any",
@@ -87,7 +85,6 @@ async def purge_any(
 
         except Exception:
             pass
-
 
 def setup(bot):
     bot.tree.add_command(

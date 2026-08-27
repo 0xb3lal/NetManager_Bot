@@ -18,13 +18,10 @@ MIDNIGHT_MAX_RETRIES    = 40    # safety cap (~6.5 hours)
 
 _midnight_retry_running = False
 
-
 def setup_midnight_reset_task(bot):
-    """Create and configure the midnight reset task."""
 
     @tasks.loop(time=MIDNIGHT_RESET_TIME)
     async def midnight_reset_task():
-        """Midnight reset: clear stats, unban daily-limit devices, reset custom limits."""
         global _midnight_retry_running
         logger.info("Starting scheduled midnight reset...")
         channel = bot.get_channel(CHANNEL_ID)
@@ -80,9 +77,8 @@ def setup_midnight_reset_task(bot):
 
     return midnight_reset_task
 
-
 async def _run_midnight_reset_steps():
-    """Execute all midnight reset steps."""
+    """Run midnight reset: stats, daily-limit unbans, limits and quota clear."""
     async with ROUTER_LOCK:
         ip_ok = await asyncio.to_thread(reset_ip_traffic_stats)
     await asyncio.sleep(5)
@@ -113,9 +109,7 @@ async def _run_midnight_reset_steps():
 
     return ip_ok, bw_ok, unbanned_count, cleared_overrides, cleared_extra_quota
 
-
 def _midnight_status_box(ip_ok, bw_ok, unbanned_count, cleared_overrides, cleared_extra_quota):
-    """Format midnight reset status for embed."""
     return (
         f"```\n"
         f"{'IP Traffic Reset:'.ljust(20)} {'OK' if ip_ok else 'FAILED'}\n"
@@ -126,9 +120,8 @@ def _midnight_status_box(ip_ok, bw_ok, unbanned_count, cleared_overrides, cleare
         f"```"
     )
 
-
 async def _retry_midnight_reset(channel):
-    """Retry midnight reset on failure, notifying on every attempt (success or failure)."""
+    """Retry midnight reset on failure until success."""
     global _midnight_retry_running
     attempt = 1
     try:

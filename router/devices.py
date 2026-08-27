@@ -8,14 +8,11 @@ from logger import logger
 from state import state
 from services.onboarding import start_onboarding
 
-# TTL guards to prevent stale discovery from recreating old MAC immediately after edit/remove
-# Maps MAC -> expiry timestamp (seconds since epoch)
 _recently_migrated: dict[str, float] = {}
 _recently_removed: dict[str, float] = {}
 
 def _is_recently_guarded(mac: str) -> bool:
     now = time.time()
-    # Clean expired entries lazily
     for d in (_recently_migrated, _recently_removed):
         for k, exp in list(d.items()):
             if exp < now:
@@ -30,9 +27,8 @@ from config import (
 
 import demjson3
 
-
 def fetch_devlist():
-    """Fetch device list from router (DHCP leases, wireless, ARP)."""
+    """Fetch DHCP leases, wireless and ARP lists from router."""
     url  = f"{ROUTER_URL}/update.cgi"
     data = "exec=devlist&_http_id=TIDe5b1505eeac7f67f"
     r = ROUTER_SESSION.post(url, data=data, timeout=30)
@@ -72,9 +68,8 @@ def fetch_devlist():
 
     return dhcp_leases, wireless_devs, arp_list
 
-
 def fetch_devlist_and_discover(bot_instance):
-    """Fetch devlist, discover new devices, and start their onboarding flow."""
+    """Fetch devlist, discover new devices and start onboarding."""
     dhcp_leases, wireless_devs, arp_list = fetch_devlist()
     new_devices = []
     for lease in dhcp_leases:

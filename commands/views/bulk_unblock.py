@@ -6,9 +6,7 @@ from state import state, ROUTER_LOCK
 from utils.validators import is_valid_mac
 from router.firewall import enable_lockdown
 
-
 class BulkUnblockSelect(discord.ui.Select):
-    """Dropdown for selecting multiple devices to unblock."""
     def __init__(self, options):
         super().__init__(
             placeholder="Select devices to unblock...",
@@ -18,8 +16,6 @@ class BulkUnblockSelect(discord.ui.Select):
         )
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
-        # The invoking /rmall was admin-gated, but the posted menu itself is
-        # clickable by anyone who can see it — enforce here too.
         user = interaction.user
         if isinstance(user, discord.Member) and user.guild_permissions.administrator:
             return True
@@ -79,9 +75,7 @@ class BulkUnblockSelect(discord.ui.Select):
 
         await interaction.followup.send(embed=embed)
 
-
 class BulkUnblockView(discord.ui.View):
-    """View containing BulkUnblockSelect."""
     def __init__(self, options):
         super().__init__(timeout=60)
         self.add_item(BulkUnblockSelect(options))

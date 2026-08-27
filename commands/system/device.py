@@ -11,7 +11,6 @@ from utils.autocomplete import all_macs_autocomplete
 from services.traffic import get_today_usage_by_mac
 import asyncio
 
-
 def setup(bot):
 
     @bot.tree.command(

@@ -21,17 +21,8 @@ from utils.traffic import parse_traffic_to_gb, format_data_size
 
 RADIUS_LOGIN_TIMEOUT = 30
 
-
 def fetch_radius_traffic(verbose=False):
-    """
-    Fetch available traffic from Radius dashboard.
-
-    verbose=False:
-        Silent mode (used by auto traffic checker).
-
-    verbose=True:
-        Logs success/failure (used by /balance).
-    """
+    """Fetch remaining traffic from Radius dashboard (verbose logs or silent)."""
 
     md5_password = hex_md5(D_PASSWORD)
     md5_final = hex_hmac_md5(
@@ -45,7 +36,6 @@ def fetch_radius_traffic(verbose=False):
         "Submit": "Submit"
     }
 
-    # Fresh session per call: this function runs on worker threads from
     # several concurrent entry points (hourly check, /balance, /limit), and
     # requests.Session is not safe for cross-thread sharing.
     session = requests.Session()
@@ -124,11 +114,8 @@ def fetch_radius_traffic(verbose=False):
     finally:
         session.close()
 
-
 def apply_lockdown_for_traffic(traffic_value):
-    """
-    Apply lockdown based on traffic threshold.
-    """
+    """Apply firewall lockdown based on remaining traffic threshold."""
 
     if traffic_value < state.threshold:
 
@@ -152,11 +139,8 @@ def apply_lockdown_for_traffic(traffic_value):
 
         return "`✅` System Normal", 0x47ff7e
 
-
 async def async_check_and_lock(bot_instance):
-    """
-    Check traffic and apply lockdown asynchronously.
-    """
+    """Async wrapper for traffic check and lockdown."""
 
     try:
 

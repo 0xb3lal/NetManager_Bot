@@ -10,9 +10,8 @@ from services.traffic import get_today_usage_by_mac
 from router.firewall import unban_mac
 from utils.traffic import format_data_size
 
-
 async def recheck_device_after_limit_change(bot_instance, mac):
-    """Recheck and auto-unban device if usage is now below new limit."""
+    """Re-check device usage and auto-unban if now under limit."""
 
     if mac not in state.banned_macs or db.get_ban_reason(mac) != "daily_limit":
         return
@@ -50,9 +49,8 @@ async def recheck_device_after_limit_change(bot_instance, mac):
 
         await channel.send(embed=embed)
 
-
 async def recheck_default_limit_devices(bot_instance):
-    """Auto-unban devices that were limited by daily_limit but now under default."""
+    """Auto-unban devices now under the default limit."""
 
     daily_banned = db.get_banned_by_reason("daily_limit")
     overrides = db.get_all_device_daily_limits()
@@ -104,18 +102,7 @@ async def recheck_default_limit_devices(bot_instance):
             await channel.send(embed=embed)
 
 async def add_extra_quota_covering_overage(bot_instance, mac, amount_gb):
-    """
-    Add extra quota to a device, always granting the requested amount as
-    fresh headroom on top of the device's actual current usage (not on top
-    of the base limit, and not piled on top of any stale extra from a
-    previous add/edit). Works whether the device is currently under its
-    limit or already over it (e.g. blocked).
-
-    new_effective_limit = max(base_limit, usage_now) + amount_gb
-
-    Returns (new_extra_total, new_effective_limit, usage_gb),
-    or None when the quota write failed.
-    """
+    """Grant extra quota as fresh headroom over current usage; fails closed on DB error."""
     async with ROUTER_LOCK:
         usage_by_mac = await asyncio.to_thread(get_today_usage_by_mac)
 
@@ -131,7 +118,6 @@ async def add_extra_quota_covering_overage(bot_instance, mac, amount_gb):
         stored = usage_db.set_extra_quota(mac, new_extra_total)
 
     if stored is None:
-        # DB write failed — do not report success or notify anyone.
         return None
 
     telegram_db.reset_notified_thresholds(mac)
