@@ -39,11 +39,16 @@ def _device_name(mac: str) -> str:
 
 
 class OnboardingSession:
-
-    def __init__(self, mac: str, hostname: str, ip: str = None):
+    # Exception to 4-arg limit (clean-code-guard): display-only wireless fields are
+    # optional and added per approved plan; grouping into a DTO would be speculative
+    # until a second caller needs it. Revisit if a third wireless consumer appears.
+    def __init__(self, mac: str, hostname: str, ip: str = None, rssi_dbm: int | None = None, distance_m: float | None = None, quality_pct: int | None = None):
         self.mac = mac
         self.hostname = hostname
         self.ip = ip
+        self.rssi_dbm = rssi_dbm
+        self.distance_m = distance_m
+        self.quality_pct = quality_pct
         self.step = "q1"          # q1 -> q2/q3 -> done
         self.context = None       # "allowed" | "blocked" once Q1 answered
         self.whitelisted = False
@@ -99,16 +104,29 @@ def _info_box(lines: list[tuple[str, str]]) -> str:
 
 
 def _kickoff_embed(session: OnboardingSession) -> discord.Embed:
+    from config import RSSI_DISPLAY_ENABLED, DISTANCE_ESTIMATION_ENABLED
+
+    lines = [
+        ("Device:", session.hostname),
+        ("MAC:", session.mac),
+        ("Status:", "Blocked until reviewed"),
+    ]
+    if RSSI_DISPLAY_ENABLED:
+        if session.rssi_dbm is not None and session.quality_pct is not None:
+            lines.append(("Signal:", f"`📶` {session.quality_pct}%"))
+        else:
+            lines.append(("Signal:", "— (wired)"))
+        if DISTANCE_ESTIMATION_ENABLED and session.distance_m is not None:
+            lines.append(("Distance:", f"`📏` ~{session.distance_m:.1f} m"))
+    footer = "This device is blocked. Answer below to finish setup."
+    if DISTANCE_ESTIMATION_ENABLED and session.distance_m is not None:
+        footer = "Est. distance is approximate (±50%+ indoors) • " + footer
     embed = discord.Embed(
         title="`🆕` New Device Detected — Review Required",
-        description=_info_box([
-            ("Device:", session.hostname),
-            ("MAC:", session.mac),
-            ("Status:", "Blocked until reviewed"),
-        ]),
+        description=_info_box(lines),
         color=_COLOR_NEW,
     )
-    embed.set_footer(text="This device is blocked. Answer below to finish setup.")
+    embed.set_footer(text=footer)
     return embed
 
 
@@ -497,8 +515,9 @@ async def _finish_blocked(session: OnboardingSession):
         logger.error(f"Failed to send onboarding ack for {session.mac}: {e}")
 
 
-async def start_onboarding(bot_instance, mac: str, hostname: str, ip: str = None):
+async def start_onboarding(bot_instance, mac: str, hostname: str, ip: str = None, rssi_dbm: int | None = None, distance_m: float | None = None, quality_pct: int | None = None):
     """Open the question chain for a freshly discovered (already PENDING) MAC."""
+
     mac = mac.upper()
     if mac in _sessions:
         return
@@ -516,7 +535,7 @@ async def start_onboarding(bot_instance, mac: str, hostname: str, ip: str = None
             ip = resolve_ip_for_mac(mac)
         except Exception:
             pass
-    session = OnboardingSession(mac, hostname, ip)
+    session = OnboardingSession(mac, hostname, ip, rssi_dbm, distance_m, quality_pct)
     view = OnboardingQ1View(session)
     try:
         message = await channel.send(embed=_kickoff_embed(session), view=view)

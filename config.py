@@ -4,7 +4,9 @@ import requests
 import discord
 from dotenv import load_dotenv
 load_dotenv()
+from urllib.parse import urlparse as _urlparse
 
+# --- Required .env values ---
 REQUIRED_ENV_VARS = (
     "D_USERNAME", "D_PASSWORD", "ROUTER_URL", "RADIUS_URL",
     "DISCORD_TOKEN", "CHANNEL_ID", "ROUTER_USER", "ROUTER_PASS"
@@ -24,32 +26,11 @@ ROUTER_AUTH = (
     os.getenv("ROUTER_USER"),
     os.getenv("ROUTER_PASS"),
 )
-
 DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
-GUILD_ID = discord.Object(id=1475047474832867338)
 CHANNEL_ID = int(os.getenv("CHANNEL_ID"))
-WIFI_IFACE = os.getenv("WIFI_IFACE", "eth1")
+TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 
-UNKNOWN_HOSTNAME_TRAFFIC_THRESHOLD_MB = float(os.getenv("UNKNOWN_HOSTNAME_TRAFFIC_THRESHOLD_MB", "100"))
-ANOMALY_CHECK_INTERVAL_MINUTES = int(os.getenv("ANOMALY_CHECK_INTERVAL_MINUTES", "10"))
-
-STALE_DEVICE_CHECK_INTERVAL_DAYS = int(os.getenv("STALE_DEVICE_CHECK_INTERVAL_DAYS", "3"))
-STALE_DEVICE_THRESHOLD_DAYS = int(os.getenv("STALE_DEVICE_THRESHOLD_DAYS", "3"))
-
-_invalid_limits = []
-if min(STALE_DEVICE_CHECK_INTERVAL_DAYS, STALE_DEVICE_THRESHOLD_DAYS, ANOMALY_CHECK_INTERVAL_MINUTES) < 1:
-    _invalid_limits.append(
-        "STALE_DEVICE_CHECK_INTERVAL_DAYS, STALE_DEVICE_THRESHOLD_DAYS and "
-        "ANOMALY_CHECK_INTERVAL_MINUTES must be >= 1"
-    )
-if UNKNOWN_HOSTNAME_TRAFFIC_THRESHOLD_MB <= 0:
-    _invalid_limits.append("UNKNOWN_HOSTNAME_TRAFFIC_THRESHOLD_MB must be > 0")
-if _invalid_limits:
-    # Fail fast: a zero stale threshold would purge the whole device table,
-    # and a zero interval crashes task registration at startup.
-    raise RuntimeError(f"Invalid configuration: {'; '.join(_invalid_limits)}")
-
-from urllib.parse import urlparse as _urlparse
+# --- ROUTER_URL / RADIUS_URL validation & cleanup ---
 for _name, _val in (("ROUTER_URL", ROUTER_URL), ("RADIUS_URL", RADIUS_URL)):
     _parsed = _urlparse(_val)
     if _parsed.scheme not in ("http", "https") or not _parsed.hostname:
@@ -58,7 +39,19 @@ for _name, _val in (("ROUTER_URL", ROUTER_URL), ("RADIUS_URL", RADIUS_URL)):
 ROUTER_URL = ROUTER_URL.rstrip("/")
 RADIUS_URL = RADIUS_URL.rstrip("/")
 
-TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
+# --- Fixed settings (edit here directly, not via .env) ---
+GUILD_ID = discord.Object(id=1475047474832867338)
+WIFI_IFACE = "eth1"
+UNKNOWN_HOSTNAME_TRAFFIC_THRESHOLD_MB = 100
+ANOMALY_CHECK_INTERVAL_MINUTES = 10
+STALE_DEVICE_CHECK_INTERVAL_DAYS = 3
+STALE_DEVICE_THRESHOLD_DAYS = 3
+RSSI_DISPLAY_ENABLED = True
+DISTANCE_ESTIMATION_ENABLED = True
+RSSI_AT_1M_DBM = -47
+WIFI_PATH_LOSS_EXPONENT = 2.7
+
+# --- Router HTTP session ---
 urllib3.disable_warnings()
 
 ROUTER_SESSION = requests.Session()

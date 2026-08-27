@@ -4,7 +4,7 @@ from logger import logger
 from state import state, ROUTER_LOCK
 from utils.discord import safe_defer
 from router.devices import fetch_devlist
-
+from utils.wireless import rssi_to_quality_pct
 def setup(bot):
 
     @bot.tree.command(
@@ -68,12 +68,7 @@ def setup(bot):
 
                     status_icon = "🟢"
 
-                    quality = min(
-                        max(2 * (rssi + 100), 0),
-                        100
-                    )
-
-                    sig_str = f"{quality}%"
+                    sig_str = f"{rssi_to_quality_pct(rssi)}%"
 
                 else:
 
