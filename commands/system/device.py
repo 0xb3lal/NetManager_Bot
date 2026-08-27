@@ -42,10 +42,12 @@ def setup(bot):
 
             usage_gb = usage_by_mac.get(mac_upper, 0)
 
-            base_limit = db.get_device_daily_limit(mac_upper)
+            base_limit, mode, expires_on = db.get_device_daily_limit_with_mode(mac_upper)
             has_custom_limit = base_limit is not None
             if base_limit is None:
                 base_limit = db.get_daily_default_limit()
+                mode = None
+                expires_on = None
 
             extra_quota = usage_db.get_extra_quota(mac_upper)
             effective_limit = base_limit + extra_quota
@@ -64,6 +66,12 @@ def setup(bot):
             else:
                 status = "✅ Active"
 
+            mode_label = ""
+            if has_custom_limit:
+                if mode == "today_only":
+                    mode_label = f" [today_only expires {expires_on}]"
+                else:
+                    mode_label = " [persistent]"
             lines = [
                 f"{'Device:'.ljust(15)} {device_name}",
                 f"{'MAC:'.ljust(15)} {mac_upper}",
@@ -72,7 +80,7 @@ def setup(bot):
                 "",
                 f"{'Used Today:'.ljust(15)} {format_data_size(usage_gb)}",
                 f"{'Base Limit:'.ljust(15)} {format_data_size(base_limit)}"
-                + (" (custom)" if has_custom_limit else " (default)")
+                + (" (custom" + mode_label + ")" if has_custom_limit else " (default)")
                 + (" (exempt)" if exempt else ""),
             ]
 

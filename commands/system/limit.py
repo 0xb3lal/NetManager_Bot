@@ -26,7 +26,8 @@ def setup(bot):
         scope="Which limit to change (defaults to the main balance threshold)",
         value="The new limit value",
         unit="Unit for the value (defaults to GB)",
-        mac="Set a custom daily limit for one specific device"
+        mac="Set a custom daily limit for one specific device",
+        mode="Persistence of custom limit: persistent (indefinite) or today_only (expires next Cairo day)"
     )
     @app_commands.choices(scope=[
         app_commands.Choice(name="Main Balance", value="main"),
@@ -38,13 +39,18 @@ def setup(bot):
         app_commands.Choice(name="GB", value="GB"),
         app_commands.Choice(name="MB", value="MB"),
     ])
+    @app_commands.choices(mode=[
+        app_commands.Choice(name="Persistent", value="persistent"),
+        app_commands.Choice(name="Today only", value="today_only"),
+    ])
     @app_commands.autocomplete(mac=all_macs_autocomplete)
     async def set_limit(
         interaction: discord.Interaction,
         scope: app_commands.Choice[str] = None,
         value: float = None,
         unit: app_commands.Choice[str] = None,
-        mac: str = None
+        mac: str = None,
+        mode: app_commands.Choice[str] = None
     ):
 
         if not await safe_defer(interaction, thinking=True):
@@ -57,7 +63,7 @@ def setup(bot):
             if scope_value == "list":
 
                 default_limit = db.get_daily_default_limit()
-                overrides = db.get_all_device_daily_limits()
+                overrides = db.get_all_device_daily_limits_with_mode()
 
                 lines = [
                     f"{'Main Threshold:'.ljust(18)} {state.threshold} GB",
@@ -68,10 +74,11 @@ def setup(bot):
                     lines.append("")
                     lines.append("Custom Daily Limits:")
 
-                    for m, gb in overrides.items():
+                    for m, (gb, mode, expires_on) in overrides.items():
                         device_name = state.macs_list.get(m, m)
+                        mode_label = "persistent" if mode == "persistent" else f"today_only (expires {expires_on})"
                         lines.append(
-                            f"  {device_name[:14].ljust(14)} : {format_data_size(gb)}"
+                            f"  {device_name[:14].ljust(14)} : {format_data_size(gb)} [{mode_label}]"
                         )
 
                 embed = discord.Embed(
@@ -136,17 +143,22 @@ def setup(bot):
                     )
                     return
 
+                mode_value = mode.value if mode else "persistent"
+                if mode_value not in ("persistent", "today_only"):
+                    mode_value = "persistent"
 
                 db.set_device_daily_limit(
                     mac_upper,
-                    value_gb
+                    value_gb,
+                    mode_value
                 )
 
                 logger.info(
                     f"User {interaction.user} set custom daily limit "
-                    f"for {mac_upper} to {value_gb} GB"
+                    f"for {mac_upper} to {value_gb} GB mode={mode_value}"
                 )
 
+                mode_desc = "persistent (indefinite)" if mode_value == "persistent" else "today_only (expires next Cairo day)"
 
                 await interaction.followup.send(
                     embed=discord.Embed(
@@ -155,6 +167,7 @@ def setup(bot):
                             f"```\n"
                             f"Device:     {state.macs_list.get(mac_upper, mac_upper)}\n"
                             f"New Limit:  {format_data_size(value_gb)}\n"
+                            f"Mode:       {mode_desc}\n"
                             f"```"
                             "\n`✅` Settings updated."
                         ),

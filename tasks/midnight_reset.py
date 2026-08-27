@@ -103,7 +103,7 @@ async def _run_midnight_reset_steps():
                     unbanned_count += 1
             await asyncio.to_thread(enable_lockdown, force_lock=state.lockdown_state)
 
-    cleared_overrides = await asyncio.to_thread(db.clear_all_device_daily_limits)
+    cleared_overrides = await asyncio.to_thread(db.clear_expired_today_only_limits)
     await asyncio.to_thread(db.clear_daily_notifications)
 
     cleared_extra_quota = await asyncio.to_thread(usage_db.clear_all_extra_quota)

@@ -2,10 +2,23 @@ import sqlite3
 import logging
 from contextlib import contextmanager
 from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
 
 logger = logging.getLogger(__name__)
 
 DB_FILE = "netmanager.db"
+
+_CAIRO_TZ = ZoneInfo("Africa/Cairo")
+
+def _today_cairo_str() -> str:
+    return datetime.now(_CAIRO_TZ).date().isoformat()
+
+def _is_today_only_expired(mode: str | None, expires_on: str | None) -> bool:
+    if mode != "today_only":
+        return False
+    if not expires_on:
+        return False
+    return expires_on != _today_cairo_str()
 
 # NOTE: devices are sourced exclusively from the router via discovery.
 # The old static SEED_DEVICES bootstrap list was removed on purpose —
@@ -95,6 +108,16 @@ def init_db():
         if not _column_exists(conn, "devices", "last_seen"):
             conn.execute("ALTER TABLE devices ADD COLUMN last_seen TEXT")
             logger.info("Migrated 'devices' table: added 'last_seen' column.")
+
+        # ---- Migration: per-device daily limit persistence (persistent vs today_only) ----
+        if not _column_exists(conn, "daily_limits", "mode"):
+            conn.execute(
+                "ALTER TABLE daily_limits ADD COLUMN mode TEXT NOT NULL DEFAULT 'persistent' CHECK(mode IN ('persistent','today_only'))"
+            )
+            logger.info("Migrated 'daily_limits' table: added 'mode' column (persistent/today_only).")
+        if not _column_exists(conn, "daily_limits", "expires_on"):
+            conn.execute("ALTER TABLE daily_limits ADD COLUMN expires_on TEXT")
+            logger.info("Migrated 'daily_limits' table: added 'expires_on' column.")
 
         conn.execute(
             "INSERT OR IGNORE INTO settings (key, value) VALUES ('threshold', '3.0')"
@@ -474,39 +497,121 @@ def set_daily_default_limit(value: float):
         logger.error(f"Error saving daily default limit: {e}")
 
 def get_device_daily_limit(mac: str) -> float | None:
+    """Return active custom limit or None. today_only expired limits are treated as absent."""
     mac = mac.upper()
     try:
         with get_db() as conn:
             row = conn.execute(
-                "SELECT limit_gb FROM daily_limits WHERE mac = ?", (mac,)
+                "SELECT limit_gb, mode, expires_on FROM daily_limits WHERE mac = ?", (mac,)
             ).fetchone()
-        return float(row["limit_gb"]) if row else None
+        if not row:
+            return None
+        mode = row["mode"] if "mode" in row.keys() and row["mode"] else "persistent"
+        expires_on = row["expires_on"] if "expires_on" in row.keys() else None
+        if _is_today_only_expired(mode, expires_on):
+            return None
+        return float(row["limit_gb"])
     except Exception as e:
         logger.error(f"Error loading daily limit for {mac}: {e}")
         return None
 
-def set_device_daily_limit(mac: str, value: float):
+def get_device_daily_limit_with_mode(mac: str) -> tuple[float | None, str | None, str | None]:
+    """Return (limit_gb, mode, expires_on) for UI; None if no active custom limit."""
     mac = mac.upper()
     try:
         with get_db() as conn:
+            row = conn.execute(
+                "SELECT limit_gb, mode, expires_on FROM daily_limits WHERE mac = ?", (mac,)
+            ).fetchone()
+        if not row:
+            return None, None, None
+        mode = row["mode"] if "mode" in row.keys() and row["mode"] else "persistent"
+        expires_on = row["expires_on"] if "expires_on" in row.keys() else None
+        if _is_today_only_expired(mode, expires_on):
+            return None, None, None
+        return float(row["limit_gb"]), mode, expires_on
+    except Exception as e:
+        logger.error(f"Error loading daily limit with mode for {mac}: {e}")
+        return None, None, None
+
+def set_device_daily_limit(mac: str, value: float, mode: str = "persistent"):
+    mac = mac.upper()
+    if mode not in ("persistent", "today_only"):
+        mode = "persistent"
+    expires_on = _today_cairo_str() if mode == "today_only" else None
+    try:
+        with get_db() as conn:
             conn.execute(
-                "INSERT OR REPLACE INTO daily_limits (mac, limit_gb) VALUES (?, ?)",
-                (mac, value)
+                "INSERT OR REPLACE INTO daily_limits (mac, limit_gb, mode, expires_on) VALUES (?, ?, ?, ?)",
+                (mac, value, mode, expires_on)
             )
-        logger.info(f"Daily limit for {mac} set to {value} GB")
+        logger.info(f"Daily limit for {mac} set to {value} GB mode={mode} expires_on={expires_on}")
     except Exception as e:
         logger.error(f"Error saving daily limit for {mac}: {e}")
 
 def get_all_device_daily_limits() -> dict:
-    with get_db() as conn:
-        rows = conn.execute("SELECT mac, limit_gb FROM daily_limits").fetchall()
-    return {row["mac"]: float(row["limit_gb"]) for row in rows}
+    """Return only active custom limits (expired today_only filtered)."""
+    try:
+        with get_db() as conn:
+            rows = conn.execute("SELECT mac, limit_gb, mode, expires_on FROM daily_limits").fetchall()
+        out = {}
+        for row in rows:
+            mode = row["mode"] if "mode" in row.keys() and row["mode"] else "persistent"
+            expires_on = row["expires_on"] if "expires_on" in row.keys() else None
+            if _is_today_only_expired(mode, expires_on):
+                continue
+            out[row["mac"]] = float(row["limit_gb"])
+        return out
+    except Exception as e:
+        logger.error(f"Error loading all daily limits: {e}")
+        return {}
+
+def get_all_device_daily_limits_with_mode() -> dict:
+    """Return active limits with metadata: {mac: (limit_gb, mode, expires_on)}."""
+    try:
+        with get_db() as conn:
+            rows = conn.execute("SELECT mac, limit_gb, mode, expires_on FROM daily_limits").fetchall()
+        out = {}
+        for row in rows:
+            mode = row["mode"] if "mode" in row.keys() and row["mode"] else "persistent"
+            expires_on = row["expires_on"] if "expires_on" in row.keys() else None
+            if _is_today_only_expired(mode, expires_on):
+                continue
+            out[row["mac"]] = (float(row["limit_gb"]), mode, expires_on)
+        return out
+    except Exception as e:
+        logger.error(f"Error loading all daily limits with mode: {e}")
+        return {}
 
 def get_effective_daily_limit(mac: str) -> float:
     import usage_db  # local import to avoid circular import with usage_db.py
     custom = get_device_daily_limit(mac)
     base = custom if custom is not None else get_daily_default_limit()
     return base + usage_db.get_extra_quota(mac)
+
+def clear_expired_today_only_limits() -> int:
+    """Delete only today_only limits whose Cairo day has ended. Returns count."""
+    try:
+        today = _today_cairo_str()
+        with get_db() as conn:
+            # Count first
+            rows = conn.execute(
+                "SELECT mac, expires_on FROM daily_limits WHERE mode='today_only'"
+            ).fetchall()
+            expired = [r for r in rows if r["expires_on"] and r["expires_on"] != today]
+            if not expired:
+                return 0
+            conn.execute(
+                "DELETE FROM daily_limits WHERE mode='today_only' AND expires_on != ?", (today,)
+            )
+            # Also clean any today_only with NULL expires_on (should not happen) — keep them
+            deleted = conn.execute("SELECT changes() as c").fetchone()["c"]
+        if deleted:
+            logger.info(f"Cleared {deleted} expired today_only daily limit(s) (today={today}).")
+        return deleted
+    except Exception as e:
+        logger.error(f"Error clearing expired today_only limits: {e}")
+        return 0
 
 def clear_all_device_daily_limits() -> int:
     try:
