@@ -16,10 +16,10 @@ MAX_PURGE_AMOUNT = 1000
 @app_commands.checks.has_permissions(administrator=True)
 @app_commands.describe(
     action="Delete a specific amount or every message in the channel",
-    amount="Number of messages to delete (required when action is Amount)"
+    amount="Number of messages to delete (required when action is Custom Amount)"
 )
 @app_commands.choices(action=[
-    app_commands.Choice(name="Amount", value="amount"),
+    app_commands.Choice(name="Custom Amount", value="amount"),
     app_commands.Choice(name="All Messages", value="all_messages"),
 ])
 async def purge(
@@ -30,7 +30,7 @@ async def purge(
     if action.value == "amount" and not amount:
         try:
             await interaction.response.send_message(
-                "`❌` Provide an amount when action is set to Amount.",
+                "`❌` Provide an amount when action is set to Custom Amount.",
                 ephemeral=True
             )
         except Exception as e:
@@ -48,9 +48,13 @@ async def purge(
     label = "the entire channel" if limit is None else f"up to **{limit}** messages"
 
     try:
-        await interaction.edit_original_response(
-            content=f"`🧹` Starting purge of {label}… I'll update this message when done."
+        start_embed = discord.Embed(
+            title="`🧹` Purge Started",
+            description=f"Starting purge of {label}… I'll update this message when done.",
+            color=0x3498db
         )
+        start_embed.set_footer(text=f"Requested by {interaction.user}")
+        await interaction.edit_original_response(content=None, embed=start_embed)
     except Exception:
         logger.warning("Could not send initial purge ack (interaction expired).")
 
