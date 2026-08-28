@@ -227,7 +227,7 @@ def setup(bot):
                     description=(
                         f"```\n"
                         f"Old Limit: {format_data_size(old_limit)}\n"
-                        f"New Limit: {state.threshold} GB\n"
+                        f"New Limit: {format_data_size(state.threshold)} GB\n"
                         f"```"
                     ),
                     color=0xf1c40f
