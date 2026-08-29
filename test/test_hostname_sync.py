@@ -1,7 +1,3 @@
-"""Regression tests for /macs stale hostname after /rename.
-
-A-H per spec. Run: venv/Scripts/python.exe test_hostname_sync.py
-"""
 import pathlib
 import sqlite3
 import tempfile
@@ -178,7 +174,7 @@ def test_H_static_corruption_still_pass():
     from router.static_leases import (_escape_field, _normalize_mac,
                                       _parse_raw_entries, _serialize_entry)
     assert _escape_field("AA:BB:CC:DD:EE:FF") == "AA:BB:CC:DD:EE:FF", "H colon escape regression"
-    assert _normalize_mac(r"D6\x5c:E8\x5c:06") == "D6:E8:06:00:00:00" or "D6:E8" in _normalize_mac(r"D6\x5c:E8\x5c:06")
+    assert _normalize_mac(r"D6\x5c:E8\x5c:06") == "D6:E8:06"
     # Quick roundtrip
     mac = "AA:BB:CC:DD:EE:FF"
     ser = _serialize_entry(mac, "192.168.1.10", "Host", "0")
