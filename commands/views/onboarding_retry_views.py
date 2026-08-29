@@ -2,6 +2,7 @@ import asyncio
 
 import discord
 
+import db
 from logger import logger
 from router.firewall import ban_mac, enable_lockdown, unban_mac
 from services.onboarding_sessions import (
@@ -66,7 +67,7 @@ class FirewallRetryView(discord.ui.View):
         if attempt > session.max_retries:
             attempt = session.max_retries
         # Local imports — embeds are in commands/views, not services
-        from commands.views.onboarding_embeds import _COLOR_NEW, _info_box
+        from commands.views.onboarding_embeds import _COLOR_BLOCK, _COLOR_NEW, _info_box
 
         placeholder = discord.Embed(
             title=f"`⏳` Retrying… (attempt {attempt}/{session.max_retries})",
@@ -148,6 +149,39 @@ class FirewallRetryView(discord.ui.View):
                 except Exception as e:
                     logger.error(f"Failed to send Q2 embed for {session.mac}: {e}")
             elif self.op == "q1_block":
+                # Same commit-on-success contract as the Q1 block handler: the
+                # device stays pending (DROP) until the router ban actually
+                # succeeded. Fail closed if the DB confirm fails.
+                had_pending = session.mac in state.pending_macs
+                try:
+                    state.pending_macs.discard(session.mac)
+                    db.set_onboarding_confirmed(session.mac)
+                except Exception as e:
+                    if had_pending:
+                        state.pending_macs.add(session.mac)
+                    logger.error(
+                        f"DB confirm failed for {session.mac} (Q1 block retry): {e}"
+                    )
+                    try:
+                        await interaction.followup.edit_message(
+                            message_id=session.message.id,
+                            embed=discord.Embed(
+                                title="`⚠️` Update Failed",
+                                description=_info_box(
+                                    [
+                                        ("Device:", _device_name(session.mac)),
+                                        ("MAC:", session.mac),
+                                    ]
+                                )
+                                + f"\nDatabase error: {e}\nUse /pending to retry manually.",
+                                color=_COLOR_BLOCK,
+                            ),
+                            view=None,
+                        )
+                    except Exception as e2:
+                        logger.error(f"Failed to show DB error for {session.mac}: {e2}")
+                    drop_session(session.mac)
+                    return
                 session.context = "blocked"
                 hostname = _device_name(session.mac)
                 if hostname.lower() != "unknown":
