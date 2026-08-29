@@ -21,7 +21,6 @@ def is_valid_hostname(name: str) -> bool:
 
 
 def is_valid_ip(ip: str) -> bool:
-    # Try to use existing validator if available, otherwise simple IPv4
     try:
         import ipaddress
 
@@ -37,8 +36,10 @@ def is_valid_ip(ip: str) -> bool:
             v = int(p)
             if v < 0 or v > 255:
                 return False
-            if str(v) != p and p != "0":  # no leading zeros weirdness? allow
-                pass
+            # Reject leading zeros ("010") to match the ipaddress module's
+            # strict behavior and avoid octal-interpretation ambiguity.
+            if str(v) != p:
+                return False
         return True
 
 
@@ -96,15 +97,11 @@ def _split_unescaped(s: str, delim: str):
             cur.append("\\")
             i += 2
             continue
-        # For delim ":" we also need to handle escaped colon
         if s[i] == delim and (delim != "\\"):
-            # check if previous char is backslash escape for this delim?
-            # Already handled above for \< \> \: etc.
             parts.append("".join(cur))
             cur = []
             i += 1
             continue
-        # handle generic escaped char? already
         cur.append(s[i])
         i += 1
     parts.append("".join(cur))
@@ -115,7 +112,6 @@ def _parse_raw_entries(raw: str):
     """Parse raw dhcpd_static string into dicts preserving raw substrings."""
     if not raw or not raw.strip():
         return []
-    # Split on unescaped ">"
     # Since ">" is delimiter between entries, we need to split on ">" not preceded by "\"
     entries = []
     cur = []
@@ -136,12 +132,10 @@ def _parse_raw_entries(raw: str):
         i += 1
     if cur or not entries:
         entries.append("".join(cur))
-    # Filter empty
     parsed = []
     for ent_raw in entries:
         if not ent_raw.strip():
             continue
-        # Now split ent_raw on unescaped "<" into 4 parts
         parts = []
         cur2 = []
         j = 0
@@ -149,9 +143,8 @@ def _parse_raw_entries(raw: str):
             if (
                 ent_raw[j] == "\\"
                 and j + 1 < len(ent_raw)
-                and ent_raw[j + 1] in ("<", ">", ":", "\\")
+                and                 ent_raw[j + 1] in ("<", ">", ":", "\\")
             ):
-                # keep escaped
                 cur2.append(ent_raw[j])
                 cur2.append(ent_raw[j + 1])
                 j += 2
@@ -166,7 +159,6 @@ def _parse_raw_entries(raw: str):
         parts.append("".join(cur2))
         # Expect 4 parts: MAC, IP, HOSTNAME, flag
         if len(parts) < 4:
-            # malformed, skip but preserve?
             logger.warning(f"Malformed dhcpd_static entry skipped: {ent_raw!r}")
             continue
         mac_e, ip_e, host_e, flag_e = parts[0], parts[1], parts[2], parts[3]
@@ -184,8 +176,7 @@ def _parse_raw_entries(raw: str):
 def _serialize_entry(mac: str, ip: str, hostname: str, flag: str = "0") -> str:
     mac_e = _escape_field(mac.upper())
     host_e = _escape_field(hostname)
-    # IP not escaped (contains dots), but escape just in case
-    ip_e = ip  # keep plain
+    ip_e = ip
     return f"{mac_e}<{ip_e}<{host_e}<{flag}"
 
 
@@ -257,7 +248,6 @@ def _push_dhcpd_static(new_raw: str, timeout=30):
 
 def set_static_hostname_sync(mac: str, ip: str, hostname: str):
     """Single-attempt static lease set; returns (success, error_msg)."""
-    # Validate
     if not is_valid_mac(mac):
         return False, "Invalid MAC address format"
     if not is_valid_ip(ip):
@@ -309,7 +299,6 @@ async def set_static_hostname(
         # Acquire lock per attempt (read-modify-write atomic)
         acquired = False
         try:
-            # Use bounded wait helper if available, else direct acquire
             try:
                 from state import acquire_router_lock_bounded
 
@@ -332,7 +321,6 @@ async def set_static_hostname(
                         f"set_static_hostname attempt {attempt}/{max_attempts} failed for {mac}: {err}"
                     )
             except ImportError:
-                # fallback
                 async with ROUTER_LOCK:
                     success, err = await asyncio.to_thread(
                         set_static_hostname_sync, mac, ip, hostname
@@ -364,6 +352,6 @@ def resolve_ip_for_mac(mac: str):
     for ip, cached_mac in state.ip_to_mac_cache.items():
         if cached_mac.upper() == mac:
             return ip
-    # Also check macs_list? No IP there.
-    # Fallback: could fetch via DHCP leases? But state cache is best.
+    # Returns None without a fresh DHCP lookup by design — the state cache is
+    # the best available source here, and macs_list holds no IP mapping.
     return None
