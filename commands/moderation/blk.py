@@ -1,19 +1,19 @@
 import asyncio
+
 import discord
 from discord import app_commands
+
 from logger import logger
-from state import state, ROUTER_LOCK
-from utils.validators import is_valid_mac
-from utils.discord import safe_defer
-from utils.autocomplete import mac_autocomplete
 from router.firewall import ban_mac
+from state import ROUTER_LOCK, state
+from utils.autocomplete import mac_autocomplete
+from utils.discord import safe_defer
+from utils.validators import is_valid_mac
+
 
 def setup(bot):
 
-    @bot.tree.command(
-        name="blk",
-        description="Ban a MAC address from the list"
-    )
+    @bot.tree.command(name="blk", description="Ban a MAC address from the list")
     @app_commands.checks.has_permissions(administrator=True)
     @app_commands.autocomplete(mac=mac_autocomplete)
     async def ban(interaction: discord.Interaction, mac: str):

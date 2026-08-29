@@ -4,17 +4,17 @@ import discord
 from discord import app_commands
 
 from logger import logger
-from state import state, ROUTER_LOCK
-from utils.validators import is_valid_mac
-from utils.discord import safe_defer
-from utils.autocomplete import banned_macs_autocomplete
 from router.firewall import unban_mac
+from state import ROUTER_LOCK, state
+from utils.autocomplete import banned_macs_autocomplete
+from utils.discord import safe_defer
+from utils.validators import is_valid_mac
+
 
 def setup(bot):
 
     @bot.tree.command(
-        name="rm",
-        description="Unban a device from the current banned list"
+        name="rm", description="Unban a device from the current banned list"
     )
     @app_commands.checks.has_permissions(administrator=True)
     @app_commands.autocomplete(mac=banned_macs_autocomplete)

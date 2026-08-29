@@ -1,11 +1,12 @@
 import asyncio
 
-from logger import logger
 import telegram.client as telegram_client
 import telegram.commands as telegram_commands
+from logger import logger
 
 _POLL_TIMEOUT = 30  # seconds — Telegram long-polling wait time per request
 _ERROR_BACKOFF = 5  # seconds — pause before retrying after a failure
+
 
 async def telegram_polling_loop():
     """Long-poll Telegram and dispatch updates."""
@@ -23,15 +24,19 @@ async def telegram_polling_loop():
                 try:
                     await telegram_commands.handle_update(update)
                 except Exception as e:
-                    logger.error(f"Error handling Telegram update {update.get('update_id')}: {e}")
+                    logger.error(
+                        f"Error handling Telegram update {update.get('update_id')}: {e}"
+                    )
 
         except Exception as e:
             logger.error(f"Error in Telegram polling loop: {e}")
             await asyncio.sleep(_ERROR_BACKOFF)
 
+
 def start_telegram_polling():
     """Start Telegram polling task."""
     return asyncio.create_task(telegram_polling_loop())
+
 
 async def initialize_telegram_bot():
     """Register Telegram command menu at startup."""

@@ -1,10 +1,13 @@
 import asyncio
+
 import discord
+
 import db
 from logger import logger
-from state import state, ROUTER_LOCK
-from utils.validators import is_valid_mac
 from router.firewall import enable_lockdown
+from state import ROUTER_LOCK, state
+from utils.validators import is_valid_mac
+
 
 class BulkBlockSelect(discord.ui.Select):
     def __init__(self, options):
@@ -12,7 +15,7 @@ class BulkBlockSelect(discord.ui.Select):
             placeholder="Select devices to block...",
             min_values=1,
             max_values=len(options),
-            options=options
+            options=options,
         )
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
@@ -57,22 +60,22 @@ class BulkBlockSelect(discord.ui.Select):
 
         current_list = (
             "```\n" + "\n".join(lines) + "```"
-            if lines else "No devices currently banned"
+            if lines
+            else "No devices currently banned"
         )
 
         embed = discord.Embed(
             title="`🚫` Bulk Block Completed",
             description=f"**Blocked:** {', '.join(success_list)}",
-            color=0xff4747
+            color=0xFF4747,
         )
 
         embed.add_field(
-            name="`📝` Updated Banned List",
-            value=current_list,
-            inline=False
+            name="`📝` Updated Banned List", value=current_list, inline=False
         )
 
         await interaction.followup.send(embed=embed)
+
 
 class BulkBlockView(discord.ui.View):
     def __init__(self, options):

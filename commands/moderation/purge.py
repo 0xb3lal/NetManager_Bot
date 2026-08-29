@@ -9,35 +9,38 @@ from logger import logger
 MAX_PURGE_AMOUNT = 1000
 
 
-@app_commands.command(
-    name="purge",
-    description="Delete messages in the channel"
-)
+@app_commands.command(name="purge", description="Delete messages in the channel")
 @app_commands.checks.has_permissions(administrator=True)
 @app_commands.describe(
     action="Delete a specific amount or every message in the channel",
-    amount="Number of messages to delete (required when action is Custom Amount)"
+    amount="Number of messages to delete (required when action is Custom Amount)",
 )
-@app_commands.choices(action=[
-    app_commands.Choice(name="Custom Amount", value="amount"),
-    app_commands.Choice(name="All Messages", value="all_messages"),
-])
+@app_commands.choices(
+    action=[
+        app_commands.Choice(name="Custom Amount", value="amount"),
+        app_commands.Choice(name="All Messages", value="all_messages"),
+    ]
+)
 async def purge(
     interaction: discord.Interaction,
     action: app_commands.Choice[str],
-    amount: int = None
+    amount: int = None,
 ):
     if action.value == "amount" and not amount:
         try:
             await interaction.response.send_message(
                 "`❌` Provide an amount when action is set to Custom Amount.",
-                ephemeral=True
+                ephemeral=True,
             )
         except Exception as e:
             logger.warning(f"Failed to respond to invalid /purge args: {e}")
         return
 
-    limit = None if action.value == "all_messages" else max(1, min(amount, MAX_PURGE_AMOUNT))
+    limit = (
+        None
+        if action.value == "all_messages"
+        else max(1, min(amount, MAX_PURGE_AMOUNT))
+    )
 
     try:
         await interaction.response.defer(ephemeral=True)
@@ -51,7 +54,7 @@ async def purge(
         start_embed = discord.Embed(
             title="`🧹` Purge Started",
             description=f"Starting purge of {label}… I'll update this message when done.",
-            color=0x3498db
+            color=0x3498DB,
         )
         start_embed.set_footer(text=f"Requested by {interaction.user}")
         await interaction.edit_original_response(content=None, embed=start_embed)
@@ -78,7 +81,7 @@ async def _run_purge(interaction: discord.Interaction, limit: int | None):
         deleted_count = 0
 
         for i in range(0, len(recent_ids), 100):
-            chunk = recent_ids[i:i + 100]
+            chunk = recent_ids[i : i + 100]
             if len(chunk) == 1:
                 try:
                     await channel.get_partial_message(chunk[0]).delete()
@@ -105,7 +108,7 @@ async def _run_purge(interaction: discord.Interaction, limit: int | None):
         embed = discord.Embed(
             title="`🧹` Purge Completed",
             description=f"`✅` Deleted **{deleted_count}** messages from the channel.",
-            color=0x2ecc71
+            color=0x2ECC71,
         )
         embed.set_footer(text=f"Requested by {interaction.user}")
 
@@ -120,7 +123,7 @@ async def _run_purge(interaction: discord.Interaction, limit: int | None):
             embed = discord.Embed(
                 title="`❌` Purge Failed",
                 description="Failed to delete messages.",
-                color=0xe74c3c
+                color=0xE74C3C,
             )
             embed.set_footer(text=f"Requested by {interaction.user}")
             await interaction.edit_original_response(content=None, embed=embed)

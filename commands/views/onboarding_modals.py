@@ -13,21 +13,21 @@ import asyncio
 
 import discord
 
-from logger import logger
-from state import state, ROUTER_LOCK
-from services.onboarding_sessions import (
-    OnboardingSession,
-    _sessions,
-    drop_session,
-    _device_gone,
-    _gone_notice,
-    ONBOARDING_STEP_TIMEOUT,
-)
 from commands.views.onboarding_embeds import (
-    _processing_embed,
     _allowed_ack_embed,
     _blocked_ack_embed,
+    _processing_embed,
 )
+from logger import logger
+from services.onboarding_sessions import (
+    ONBOARDING_STEP_TIMEOUT,
+    OnboardingSession,
+    _device_gone,
+    _gone_notice,
+    _sessions,
+    drop_session,
+)
+from state import ROUTER_LOCK, state
 
 
 class RenameModal(discord.ui.Modal):
@@ -78,7 +78,9 @@ class RenameModal(discord.ui.Modal):
             if not new_name:
                 session.step = "done"
                 if session.context == "allowed":
-                    logger.info(f"Onboarding complete: {session.mac} ALLOWED (whitelisted={session.whitelisted}, empty name keep unknown).")
+                    logger.info(
+                        f"Onboarding complete: {session.mac} ALLOWED (whitelisted={session.whitelisted}, empty name keep unknown)."
+                    )
                     try:
                         await interaction.followup.edit_message(
                             message_id=session.message.id,
@@ -86,9 +88,13 @@ class RenameModal(discord.ui.Modal):
                             view=None,
                         )
                     except Exception as e:
-                        logger.error(f"Failed to send onboarding ack for {session.mac}: {e}")
+                        logger.error(
+                            f"Failed to send onboarding ack for {session.mac}: {e}"
+                        )
                 else:
-                    logger.info(f"Onboarding complete: {session.mac} BLOCKED (empty name).")
+                    logger.info(
+                        f"Onboarding complete: {session.mac} BLOCKED (empty name)."
+                    )
                     try:
                         await interaction.followup.edit_message(
                             message_id=session.message.id,
@@ -96,11 +102,18 @@ class RenameModal(discord.ui.Modal):
                             view=None,
                         )
                     except Exception as e:
-                        logger.error(f"Failed to send onboarding ack for {session.mac}: {e}")
+                        logger.error(
+                            f"Failed to send onboarding ack for {session.mac}: {e}"
+                        )
                 drop_session(session.mac)
                 return
 
-            from router.static_leases import is_valid_hostname, set_static_hostname, resolve_ip_for_mac
+            from router.static_leases import (
+                is_valid_hostname,
+                resolve_ip_for_mac,
+                set_static_hostname,
+            )
+
             if not is_valid_hostname(new_name):
                 try:
                     await interaction.followup.edit_message(
@@ -110,10 +123,14 @@ class RenameModal(discord.ui.Modal):
                         view=None,
                     )
                 except Exception:
-                    logger.warning(f"Failed to edit message for invalid hostname {session.mac}")
+                    logger.warning(
+                        f"Failed to edit message for invalid hostname {session.mac}"
+                    )
                 session.step = "done"
                 if session.context == "allowed":
-                    logger.info(f"Onboarding complete: {session.mac} ALLOWED (whitelisted={session.whitelisted}, invalid hostname keep).")
+                    logger.info(
+                        f"Onboarding complete: {session.mac} ALLOWED (whitelisted={session.whitelisted}, invalid hostname keep)."
+                    )
                     try:
                         await interaction.followup.edit_message(
                             message_id=session.message.id,
@@ -121,9 +138,13 @@ class RenameModal(discord.ui.Modal):
                             view=None,
                         )
                     except Exception as e:
-                        logger.error(f"Failed to send onboarding ack for {session.mac}: {e}")
+                        logger.error(
+                            f"Failed to send onboarding ack for {session.mac}: {e}"
+                        )
                 else:
-                    logger.info(f"Onboarding complete: {session.mac} BLOCKED (invalid hostname).")
+                    logger.info(
+                        f"Onboarding complete: {session.mac} BLOCKED (invalid hostname)."
+                    )
                     try:
                         await interaction.followup.edit_message(
                             message_id=session.message.id,
@@ -131,13 +152,16 @@ class RenameModal(discord.ui.Modal):
                             view=None,
                         )
                     except Exception as e:
-                        logger.error(f"Failed to send onboarding ack for {session.mac}: {e}")
+                        logger.error(
+                            f"Failed to send onboarding ack for {session.mac}: {e}"
+                        )
                 drop_session(session.mac)
                 return
 
             ip = None
             try:
                 from router.devices import fetch_devlist
+
                 async with ROUTER_LOCK:
                     dhcp_leases, _, _ = await asyncio.to_thread(fetch_devlist)
                 for lease in dhcp_leases:
@@ -163,10 +187,14 @@ class RenameModal(discord.ui.Modal):
                         view=None,
                     )
                 except Exception:
-                    logger.warning(f"Failed to edit message for unresolved IP {session.mac}")
+                    logger.warning(
+                        f"Failed to edit message for unresolved IP {session.mac}"
+                    )
                 session.step = "done"
                 if session.context == "allowed":
-                    logger.info(f"Onboarding complete: {session.mac} ALLOWED (whitelisted={session.whitelisted}, no IP).")
+                    logger.info(
+                        f"Onboarding complete: {session.mac} ALLOWED (whitelisted={session.whitelisted}, no IP)."
+                    )
                     try:
                         await interaction.followup.edit_message(
                             message_id=session.message.id,
@@ -174,7 +202,9 @@ class RenameModal(discord.ui.Modal):
                             view=None,
                         )
                     except Exception as e:
-                        logger.error(f"Failed to send onboarding ack for {session.mac}: {e}")
+                        logger.error(
+                            f"Failed to send onboarding ack for {session.mac}: {e}"
+                        )
                 else:
                     logger.info(f"Onboarding complete: {session.mac} BLOCKED (no IP).")
                     try:
@@ -184,18 +214,22 @@ class RenameModal(discord.ui.Modal):
                             view=None,
                         )
                     except Exception as e:
-                        logger.error(f"Failed to send onboarding ack for {session.mac}: {e}")
+                        logger.error(
+                            f"Failed to send onboarding ack for {session.mac}: {e}"
+                        )
                 drop_session(session.mac)
                 return
 
             success, err = await set_static_hostname(session.mac, ip, new_name)
             if not success:
                 from services.onboarding_retry import _handle_rename_failure
+
                 await _handle_rename_failure(session, interaction, ip, new_name, err)
                 return
 
             try:
                 from router.devices import fetch_devlist
+
                 async with ROUTER_LOCK:
                     await asyncio.to_thread(fetch_devlist)
             except asyncio.CancelledError:
@@ -208,7 +242,9 @@ class RenameModal(discord.ui.Modal):
             session.step = "done"
 
             if session.context == "allowed":
-                logger.info(f"Onboarding complete: {session.mac} ALLOWED (whitelisted={session.whitelisted}, renamed={new_name}).")
+                logger.info(
+                    f"Onboarding complete: {session.mac} ALLOWED (whitelisted={session.whitelisted}, renamed={new_name})."
+                )
                 try:
                     await interaction.followup.edit_message(
                         message_id=session.message.id,
@@ -216,9 +252,13 @@ class RenameModal(discord.ui.Modal):
                         view=None,
                     )
                 except Exception as e:
-                    logger.error(f"Failed to send onboarding ack for {session.mac}: {e}")
+                    logger.error(
+                        f"Failed to send onboarding ack for {session.mac}: {e}"
+                    )
             else:
-                logger.info(f"Onboarding complete: {session.mac} BLOCKED (renamed={new_name}).")
+                logger.info(
+                    f"Onboarding complete: {session.mac} BLOCKED (renamed={new_name})."
+                )
                 try:
                     await interaction.followup.edit_message(
                         message_id=session.message.id,
@@ -226,7 +266,9 @@ class RenameModal(discord.ui.Modal):
                         view=None,
                     )
                 except Exception as e:
-                    logger.error(f"Failed to send onboarding ack for {session.mac}: {e}")
+                    logger.error(
+                        f"Failed to send onboarding ack for {session.mac}: {e}"
+                    )
             drop_session(session.mac)
         except asyncio.CancelledError:
             try:
@@ -235,7 +277,9 @@ class RenameModal(discord.ui.Modal):
                 pass
             raise
         except Exception as e:
-            logger.error(f"Unexpected error in RenameModal for {session.mac}: {e}", exc_info=True)
+            logger.error(
+                f"Unexpected error in RenameModal for {session.mac}: {e}", exc_info=True
+            )
             try:
                 await interaction.followup.edit_message(
                     message_id=session.message.id,
@@ -244,7 +288,9 @@ class RenameModal(discord.ui.Modal):
                     view=None,
                 )
             except Exception:
-                logger.warning(f"Failed to edit unexpected error message for {session.mac}")
+                logger.warning(
+                    f"Failed to edit unexpected error message for {session.mac}"
+                )
             try:
                 if session.mac in _sessions:
                     drop_session(session.mac)
@@ -253,7 +299,9 @@ class RenameModal(discord.ui.Modal):
         finally:
             session.busy = False
             if session.mac in _sessions and session.step != "done":
-                logger.warning(f"RenameModal finally cleanup for orphaned session {session.mac}")
+                logger.warning(
+                    f"RenameModal finally cleanup for orphaned session {session.mac}"
+                )
                 try:
                     drop_session(session.mac)
                 except Exception:

@@ -1,22 +1,25 @@
 import asyncio
 from datetime import time
 from zoneinfo import ZoneInfo
+
 import discord
 from discord.ext import tasks
-import db
-from logger import logger
-from state import ROUTER_LOCK, state
-from router.firewall import enable_lockdown
-from router.stats import reset_ip_traffic_stats, reset_bandwidth_stats
-from config import CHANNEL_ID
-import usage_db
-import telegram.db as telegram_db
 
-MIDNIGHT_RESET_TIME     = time(hour=0, minute=0, tzinfo=ZoneInfo("Africa/Cairo"))
-MIDNIGHT_RETRY_INTERVAL = 600   # retry every 10 minutes after a failed attempt
-MIDNIGHT_MAX_RETRIES    = 40    # safety cap (~6.5 hours)
+import db
+import telegram.db as telegram_db
+import usage_db
+from config import CHANNEL_ID
+from logger import logger
+from router.firewall import enable_lockdown
+from router.stats import reset_bandwidth_stats, reset_ip_traffic_stats
+from state import ROUTER_LOCK, state
+
+MIDNIGHT_RESET_TIME = time(hour=0, minute=0, tzinfo=ZoneInfo("Africa/Cairo"))
+MIDNIGHT_RETRY_INTERVAL = 600  # retry every 10 minutes after a failed attempt
+MIDNIGHT_MAX_RETRIES = 40  # safety cap (~6.5 hours)
 
 _midnight_retry_running = False
+
 
 def setup_midnight_reset_task(bot):
 
@@ -26,16 +29,30 @@ def setup_midnight_reset_task(bot):
         logger.info("Starting scheduled midnight reset...")
         channel = bot.get_channel(CHANNEL_ID)
         try:
-            ip_ok, bw_ok, unbanned_count, cleared_overrides, cleared_extra_quota = await _run_midnight_reset_steps()
+            ip_ok, bw_ok, unbanned_count, cleared_overrides, cleared_extra_quota = (
+                await _run_midnight_reset_steps()
+            )
 
             if channel:
                 embed = discord.Embed(
-                    title="`🌙` Midnight Reset Completed" if (ip_ok and bw_ok) else "`⚠️` Midnight Reset Partially Failed",
-                    description=_midnight_status_box(ip_ok, bw_ok, unbanned_count, cleared_overrides, cleared_extra_quota),
-                    color=0x2ecc71 if (ip_ok and bw_ok) else 0xe67e22
+                    title=(
+                        "`🌙` Midnight Reset Completed"
+                        if (ip_ok and bw_ok)
+                        else "`⚠️` Midnight Reset Partially Failed"
+                    ),
+                    description=_midnight_status_box(
+                        ip_ok,
+                        bw_ok,
+                        unbanned_count,
+                        cleared_overrides,
+                        cleared_extra_quota,
+                    ),
+                    color=0x2ECC71 if (ip_ok and bw_ok) else 0xE67E22,
                 )
                 if not (ip_ok and bw_ok):
-                    embed.set_footer(text="Retrying every 10 minutes until it succeeds...")
+                    embed.set_footer(
+                        text="Retrying every 10 minutes until it succeeds..."
+                    )
                 await channel.send(embed=embed)
 
             logger.info(
@@ -49,33 +66,42 @@ def setup_midnight_reset_task(bot):
                     _midnight_retry_running = True
                     asyncio.create_task(_retry_midnight_reset(channel))
                 else:
-                    logger.warning("Midnight retry loop already running, skipping duplicate trigger.")
+                    logger.warning(
+                        "Midnight retry loop already running, skipping duplicate trigger."
+                    )
         except Exception as e:
             logger.exception(f"Critical error in midnight_reset_task: {e}")
             if channel:
                 embed = discord.Embed(
                     title="`💥` Midnight Reset Crashed",
                     description=f"```\n{str(e)[:500]}\n```",
-                    color=0xe74c3c
+                    color=0xE74C3C,
                 )
                 embed.set_footer(text="Retrying every 10 minutes until it succeeds...")
                 try:
                     await channel.send(embed=embed)
                 except Exception as send_err:
-                    logger.error(f"Failed to send midnight-reset crash notification: {send_err}")
+                    logger.error(
+                        f"Failed to send midnight-reset crash notification: {send_err}"
+                    )
 
             if not _midnight_retry_running:
                 _midnight_retry_running = True
                 asyncio.create_task(_retry_midnight_reset(channel))
             else:
-                logger.warning("Midnight retry loop already running, skipping duplicate trigger.")
+                logger.warning(
+                    "Midnight retry loop already running, skipping duplicate trigger."
+                )
 
     @midnight_reset_task.before_loop
     async def before_midnight_reset():
         await bot.wait_until_ready()
-        logger.info("Midnight reset task started (resets router traffic stats, daily-limit bans and custom limits at 00:00 Cairo time, with retry on failure).")
+        logger.info(
+            "Midnight reset task started (resets router traffic stats, daily-limit bans and custom limits at 00:00 Cairo time, with retry on failure)."
+        )
 
     return midnight_reset_task
+
 
 async def _run_midnight_reset_steps():
     """Run midnight reset: stats, daily-limit unbans, limits and quota clear."""
@@ -87,7 +113,7 @@ async def _run_midnight_reset_steps():
         bw_ok = await asyncio.to_thread(reset_bandwidth_stats)
     await asyncio.sleep(5)
 
-    daily_banned   = db.get_banned_by_reason("daily_limit")
+    daily_banned = db.get_banned_by_reason("daily_limit")
     unbanned_count = 0
 
     if daily_banned:
@@ -109,7 +135,10 @@ async def _run_midnight_reset_steps():
 
     return ip_ok, bw_ok, unbanned_count, cleared_overrides, cleared_extra_quota
 
-def _midnight_status_box(ip_ok, bw_ok, unbanned_count, cleared_overrides, cleared_extra_quota):
+
+def _midnight_status_box(
+    ip_ok, bw_ok, unbanned_count, cleared_overrides, cleared_extra_quota
+):
     return (
         f"```\n"
         f"{'IP Traffic Reset:'.ljust(20)} {'OK' if ip_ok else 'FAILED'}\n"
@@ -119,6 +148,7 @@ def _midnight_status_box(ip_ok, bw_ok, unbanned_count, cleared_overrides, cleare
         f"{'Extra Quota Reset:'.ljust(20)} {cleared_extra_quota}\n"
         f"```"
     )
+
 
 async def _retry_midnight_reset(channel):
     """Retry midnight reset on failure until success."""
@@ -130,20 +160,26 @@ async def _retry_midnight_reset(channel):
             logger.info(f"Retrying midnight reset (attempt {attempt})...")
 
             try:
-                ip_ok, bw_ok, unbanned_count, cleared_overrides, cleared_extra_quota = await _run_midnight_reset_steps()
+                ip_ok, bw_ok, unbanned_count, cleared_overrides, cleared_extra_quota = (
+                    await _run_midnight_reset_steps()
+                )
             except Exception as e:
-                logger.error(f"Error during midnight reset retry attempt {attempt}: {e}")
+                logger.error(
+                    f"Error during midnight reset retry attempt {attempt}: {e}"
+                )
                 if channel:
                     embed = discord.Embed(
                         title=f"`💥` Midnight Reset Retry #{attempt} Crashed",
                         description=f"```\n{str(e)[:500]}\n```",
-                        color=0xe74c3c
+                        color=0xE74C3C,
                     )
                     embed.set_footer(text="Retrying again in 10 minutes...")
                     try:
                         await channel.send(embed=embed)
                     except Exception as send_err:
-                        logger.error(f"Failed to send retry-crash notification: {send_err}")
+                        logger.error(
+                            f"Failed to send retry-crash notification: {send_err}"
+                        )
                 attempt += 1
                 continue
 
@@ -151,26 +187,42 @@ async def _retry_midnight_reset(channel):
                 if channel:
                     embed = discord.Embed(
                         title="`✅` Midnight Reset Recovered",
-                        description=_midnight_status_box(ip_ok, bw_ok, unbanned_count, cleared_overrides, cleared_extra_quota),
-                        color=0x2ecc71
+                        description=_midnight_status_box(
+                            ip_ok,
+                            bw_ok,
+                            unbanned_count,
+                            cleared_overrides,
+                            cleared_extra_quota,
+                        ),
+                        color=0x2ECC71,
                     )
                     embed.set_footer(text=f"Succeeded on retry attempt {attempt}.")
                     await channel.send(embed=embed)
                 logger.info(f"Midnight reset succeeded on retry attempt {attempt}.")
                 return
 
-            logger.warning(f"Midnight reset retry attempt {attempt} still failing (ip_ok={ip_ok}, bw_ok={bw_ok}).")
+            logger.warning(
+                f"Midnight reset retry attempt {attempt} still failing (ip_ok={ip_ok}, bw_ok={bw_ok})."
+            )
             if channel:
                 embed = discord.Embed(
                     title=f"`⚠️` Midnight Reset Retry #{attempt} Still Failing",
-                    description=_midnight_status_box(ip_ok, bw_ok, unbanned_count, cleared_overrides, cleared_extra_quota),
-                    color=0xe67e22
+                    description=_midnight_status_box(
+                        ip_ok,
+                        bw_ok,
+                        unbanned_count,
+                        cleared_overrides,
+                        cleared_extra_quota,
+                    ),
+                    color=0xE67E22,
                 )
                 embed.set_footer(text="Retrying again in 10 minutes...")
                 try:
                     await channel.send(embed=embed)
                 except Exception as send_err:
-                    logger.error(f"Failed to send retry-status notification: {send_err}")
+                    logger.error(
+                        f"Failed to send retry-status notification: {send_err}"
+                    )
 
             attempt += 1
 
@@ -179,7 +231,7 @@ async def _retry_midnight_reset(channel):
             embed = discord.Embed(
                 title="`❌` Midnight Reset Still Failing",
                 description=f"Gave up after {MIDNIGHT_MAX_RETRIES} retries. Please check the router manually.",
-                color=0xe74c3c
+                color=0xE74C3C,
             )
             await channel.send(embed=embed)
     finally:

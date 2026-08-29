@@ -2,14 +2,15 @@
 
 A-H per spec. Run: venv/Scripts/python.exe test_hostname_sync.py
 """
-import tempfile
 import pathlib
 import sqlite3
+import tempfile
+from unittest.mock import MagicMock, patch
 
 # Use a temporary DB file to avoid touching real netmanager.db
 import db
 import state as state_mod
-from unittest.mock import patch, MagicMock
+
 
 def setup_temp_db():
     tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".db")
@@ -81,6 +82,7 @@ def test_C_macs_sees_new_immediately():
         state_mod.state.macs_list[mac] = "OldName"
         # /macs reads state.macs_list directly
         from commands.moderation.macs import setup as macs_setup
+
         # Simulate rename
         db.update_hostname(mac, "NewName")
         state_mod.state.macs_list[mac] = "NewName"
@@ -102,6 +104,7 @@ def test_D_discovery_unknown_no_overwrite():
         with patch("router.devices.fetch_devlist") as mock_fetch:
             mock_fetch.return_value = ([["Unknown", "192.168.1.10", mac]], [], [])
             from router.devices import fetch_devlist_and_discover
+
             # Need bot mock
             mock_bot = MagicMock()
             mock_bot.loop.is_running.return_value = False
@@ -172,7 +175,8 @@ def test_G_ip_resolution_still_pass():
 
 def test_H_static_corruption_still_pass():
     # Ensure previous static lease tests still pass
-    from router.static_leases import _escape_field, _normalize_mac, _parse_raw_entries, _serialize_entry
+    from router.static_leases import (_escape_field, _normalize_mac,
+                                      _parse_raw_entries, _serialize_entry)
     assert _escape_field("AA:BB:CC:DD:EE:FF") == "AA:BB:CC:DD:EE:FF", "H colon escape regression"
     assert _normalize_mac(r"D6\x5c:E8\x5c:06") == "D6:E8:06:00:00:00" or "D6:E8" in _normalize_mac(r"D6\x5c:E8\x5c:06")
     # Quick roundtrip

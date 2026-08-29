@@ -1,30 +1,7 @@
-from .moderation import (
-    blk,
-    rm,
-    blkall,
-    rmall,
-    macs,
-    banned_list,
-    purge,
-    pending,
-    wl
-)
+from .moderation import banned_list, blk, blkall, macs, pending, purge, rm, rmall, wl
+from .network import active, balance, netstat
+from .system import device, limit, quota, reboot, rename, tglink
 
-from .network import (
-    balance,
-    active,
-    netstat,
-
-)
-
-from .system import (
-    limit,
-    quota,
-    reboot,
-    tglink,
-    device,
-    rename
-)
 
 def setup(bot):
     blk.setup(bot)

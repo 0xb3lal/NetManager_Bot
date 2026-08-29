@@ -1,14 +1,16 @@
 import discord
 from discord import app_commands
+
+from commands.views.bulk_block import BulkBlockView
 from logger import logger
 from state import state
 from utils.discord import safe_defer
-from commands.views.bulk_block import BulkBlockView
+
+
 def setup(bot):
 
     @bot.tree.command(
-        name="blkall",
-        description="Select multiple saved devices to block"
+        name="blkall", description="Select multiple saved devices to block"
     )
     @app_commands.checks.has_permissions(administrator=True)
     async def blkall(interaction: discord.Interaction):
@@ -21,9 +23,7 @@ def setup(bot):
         try:
             options = [
                 discord.SelectOption(
-                    label=hostname,
-                    value=mac,
-                    description=f"MAC: {mac}"
+                    label=hostname, value=mac, description=f"MAC: {mac}"
                 )
                 for mac, hostname in state.macs_list.items()
                 if mac.upper() not in state.banned_macs
@@ -45,6 +45,4 @@ def setup(bot):
         except Exception as e:
             logger.error(f"FAILURE in blkall: {e}")
 
-            await interaction.followup.send(
-                f"`❌` Error: {str(e)}"
-            )
+            await interaction.followup.send(f"`❌` Error: {str(e)}")

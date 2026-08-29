@@ -4,6 +4,7 @@ from db import get_db
 
 logger = logging.getLogger(__name__)
 
+
 def init_telegram_tables():
     with get_db() as conn:
         conn.executescript("""
@@ -20,6 +21,7 @@ def init_telegram_tables():
         """)
     logger.info("Telegram tables initialized.")
 
+
 def get_device_chat_id(mac: str) -> str | None:
     mac = mac.upper()
     with get_db() as conn:
@@ -28,17 +30,19 @@ def get_device_chat_id(mac: str) -> str | None:
         ).fetchone()
     return row["chat_id"] if row else None
 
+
 def set_device_chat_id(mac: str, chat_id: str):
     mac = mac.upper()
     try:
         with get_db() as conn:
             conn.execute(
                 "INSERT OR REPLACE INTO device_telegram (mac, chat_id) VALUES (?, ?)",
-                (mac, chat_id)
+                (mac, chat_id),
             )
         logger.info(f"Telegram chat_id for {mac} set to {chat_id}")
     except Exception as e:
         logger.error(f"Error saving telegram chat_id for {mac}: {e}")
+
 
 def remove_device_chat_id(mac: str) -> bool:
     mac = mac.upper()
@@ -51,6 +55,7 @@ def remove_device_chat_id(mac: str) -> bool:
         logger.error(f"Error removing telegram chat_id for {mac}: {e}")
         return False
 
+
 def get_notified_thresholds(mac: str) -> set:
     mac = mac.upper()
     with get_db() as conn:
@@ -59,16 +64,18 @@ def get_notified_thresholds(mac: str) -> set:
         ).fetchall()
     return {row["threshold"] for row in rows}
 
+
 def mark_threshold_notified(mac: str, threshold: int):
     mac = mac.upper()
     try:
         with get_db() as conn:
             conn.execute(
                 "INSERT OR IGNORE INTO threshold_notified (mac, threshold) VALUES (?, ?)",
-                (mac, threshold)
+                (mac, threshold),
             )
     except Exception as e:
         logger.error(f"Error marking {threshold}% threshold for {mac}: {e}")
+
 
 def clear_all_threshold_notifications():
     try:
@@ -78,6 +85,7 @@ def clear_all_threshold_notifications():
     except Exception as e:
         logger.error(f"Error clearing threshold notifications: {e}")
 
+
 def reset_notified_thresholds(mac: str):
     mac = mac.upper()
     try:
@@ -86,6 +94,7 @@ def reset_notified_thresholds(mac: str):
         logger.info(f"Reset usage threshold notification flags for {mac}.")
     except Exception as e:
         logger.error(f"Error resetting threshold notifications for {mac}: {e}")
+
 
 def get_mac_by_chat_id(chat_id: str) -> str | None:
     """Find device MAC linked to Telegram chat_id."""

@@ -25,9 +25,14 @@ async def _handle_router_failure(
 ) -> bool:
     """Handle router failure for firewall ops. Returns True if session dropped (permanent), False if retry shown."""
     # Local imports — break cycle services ↔ views/embeds
-    from commands.views.onboarding_embeds import _permanent_failure_embed, _info_box, _COLOR_BLOCK
-    from services.onboarding_sessions import _device_name
     import discord
+
+    from commands.views.onboarding_embeds import (
+        _COLOR_BLOCK,
+        _info_box,
+        _permanent_failure_embed,
+    )
+    from services.onboarding_sessions import _device_name
 
     logger.error(f"Router {op} failed for {session.mac}: {error}")
     session.retry_count += 1
@@ -45,14 +50,18 @@ async def _handle_router_failure(
     remaining = session.max_retries - session.retry_count
     error_embed = discord.Embed(
         title="`⚠️` Update Failed",
-        description=_info_box([
-            ("Device:", _device_name(session.mac)),
-            ("MAC:", session.mac),
-        ]) + f"\nRouter update failed: {error}\n{remaining} retries remaining.",
+        description=_info_box(
+            [
+                ("Device:", _device_name(session.mac)),
+                ("MAC:", session.mac),
+            ]
+        )
+        + f"\nRouter update failed: {error}\n{remaining} retries remaining.",
         color=_COLOR_BLOCK,
     )
     # Local import — breaks cycle with retry Views
     from commands.views.onboarding_retry_views import FirewallRetryView
+
     retry_view = FirewallRetryView(session, op)
     try:
         await interaction.followup.edit_message(
@@ -73,11 +82,18 @@ async def _handle_rename_failure(
     error: str,
 ) -> bool:
     """Handle rename failure — increments retry_count, shows retry or permanent failure."""
-    from commands.views.onboarding_embeds import _permanent_failure_embed, _info_box, _COLOR_BLOCK
-    from services.onboarding_sessions import _device_name
     import discord
 
-    logger.error(f"Onboarding rename failed for {session.mac} -> {new_name} ({ip}): {error}")
+    from commands.views.onboarding_embeds import (
+        _COLOR_BLOCK,
+        _info_box,
+        _permanent_failure_embed,
+    )
+    from services.onboarding_sessions import _device_name
+
+    logger.error(
+        f"Onboarding rename failed for {session.mac} -> {new_name} ({ip}): {error}"
+    )
     session.retry_count += 1
     if session.retry_count >= session.max_retries:
         try:
@@ -93,13 +109,17 @@ async def _handle_rename_failure(
     remaining = session.max_retries - session.retry_count
     error_embed = discord.Embed(
         title="`⚠️` Update Failed",
-        description=_info_box([
-            ("Device:", _device_name(session.mac)),
-            ("MAC:", session.mac),
-        ]) + f"\nRouter rename failed: {error}\n{remaining} retries remaining.",
+        description=_info_box(
+            [
+                ("Device:", _device_name(session.mac)),
+                ("MAC:", session.mac),
+            ]
+        )
+        + f"\nRouter rename failed: {error}\n{remaining} retries remaining.",
         color=_COLOR_BLOCK,
     )
     from commands.views.onboarding_retry_views import RenameRetryView
+
     retry_view = RenameRetryView(session, ip, new_name)
     try:
         await interaction.followup.edit_message(

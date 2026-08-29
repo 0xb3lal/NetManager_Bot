@@ -10,6 +10,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 from router.static_leases import is_valid_ip
 from utils.validators import is_valid_mac
 
+
 # Helper to simulate the resolution logic from commands/system/rename.py
 async def resolve_ip_for_rename(mac: str, ip: str, mock_active, mock_static):
     """
@@ -164,7 +165,7 @@ async def test_H_regression_and_multiple_entries():
 
 async def test_integration_with_mocks():
     """Integration: mock fetch_devlist and fetch_current_entries as rename.py does."""
-    from unittest.mock import patch, AsyncMock
+    from unittest.mock import AsyncMock, patch
 
     # Simulate rename.py's actual logic by patching
     mac = "AA:BB:CC:DD:EE:FF"

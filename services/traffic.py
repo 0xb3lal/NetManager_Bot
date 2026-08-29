@@ -1,22 +1,17 @@
 import asyncio
+
 import discord
+
 import db
 from config import CHANNEL_ID
 from logger import logger
-from state import ROUTER_LOCK, state
-from router.traffic import (
-    get_speed_history,
-    get_daily_history,
-    get_today_combined,
-)
 from router.devices import fetch_devlist
 from router.firewall import enable_lockdown
+from router.traffic import get_daily_history, get_speed_history, get_today_combined
 from services.radius import fetch_radius_traffic
-from utils.traffic import (
-    bytes_to_mb,
-    parse_traffic_to_gb,
-    format_data_size,
-)
+from state import ROUTER_LOCK, state
+from utils.traffic import bytes_to_mb, format_data_size, parse_traffic_to_gb
+
 
 def get_today_usage_by_mac():
     """Return today's usage per MAC from router stats."""
@@ -34,18 +29,20 @@ def get_today_usage_by_mac():
         usage_by_mac[mac] = usage_by_mac.get(mac, 0) + bytes_to_mb(total_bytes) / 1024
     return usage_by_mac
 
+
 def apply_lockdown_for_traffic(traffic_value):
     """Apply lockdown if usage exceeds threshold."""
     if traffic_value < state.threshold:
         enable_lockdown(force_lock=True)
         state.lockdown_state = True
         db.set_lockdown_state(True)
-        return "`❌` System Lockdown", 0xff4747
+        return "`❌` System Lockdown", 0xFF4747
 
     enable_lockdown(force_lock=False)
     state.lockdown_state = False
     db.set_lockdown_state(False)
-    return "`✅` System Normal", 0x47ff7e
+    return "`✅` System Normal", 0x47FF7E
+
 
 async def async_check_and_lock(bot_instance):
     """Async traffic check and lockdown."""
@@ -59,8 +56,7 @@ async def async_check_and_lock(bot_instance):
 
         async with ROUTER_LOCK:
             e_title, e_color = await asyncio.to_thread(
-                apply_lockdown_for_traffic,
-                traffic_value
+                apply_lockdown_for_traffic, traffic_value
             )
 
         balance_label = "Balance:".ljust(9)
@@ -73,11 +69,7 @@ async def async_check_and_lock(bot_instance):
             f"```"
         )
 
-        embed = discord.Embed(
-            title=e_title,
-            description=status_box,
-            color=e_color
-        )
+        embed = discord.Embed(title=e_title, description=status_box, color=e_color)
 
         try:
             channel = bot_instance.get_channel(CHANNEL_ID)

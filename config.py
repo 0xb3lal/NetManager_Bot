@@ -1,15 +1,23 @@
 import os
-import urllib3
-import requests
+
 import discord
+import requests
+import urllib3
 from dotenv import load_dotenv
+
 load_dotenv()
 from urllib.parse import urlparse as _urlparse
 
 # --- Required .env values ---
 REQUIRED_ENV_VARS = (
-    "D_USERNAME", "D_PASSWORD", "ROUTER_URL", "RADIUS_URL",
-    "DISCORD_TOKEN", "CHANNEL_ID", "ROUTER_USER", "ROUTER_PASS"
+    "D_USERNAME",
+    "D_PASSWORD",
+    "ROUTER_URL",
+    "RADIUS_URL",
+    "DISCORD_TOKEN",
+    "CHANNEL_ID",
+    "ROUTER_USER",
+    "ROUTER_PASS",
 )
 
 missing_env = [var for var in REQUIRED_ENV_VARS if not os.getenv(var)]
@@ -34,7 +42,9 @@ TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 for _name, _val in (("ROUTER_URL", ROUTER_URL), ("RADIUS_URL", RADIUS_URL)):
     _parsed = _urlparse(_val)
     if _parsed.scheme not in ("http", "https") or not _parsed.hostname:
-        raise RuntimeError(f"Invalid {_name}={_val!r}: must be http(s)://host[:port][/path]")
+        raise RuntimeError(
+            f"Invalid {_name}={_val!r}: must be http(s)://host[:port][/path]"
+        )
 # Normalize trailing slash to avoid double-slash in URL construction (e.g. http://192.168.1.1/ + /tomato.cgi)
 ROUTER_URL = ROUTER_URL.rstrip("/")
 RADIUS_URL = RADIUS_URL.rstrip("/")
@@ -57,9 +67,11 @@ urllib3.disable_warnings()
 ROUTER_SESSION = requests.Session()
 ROUTER_SESSION.auth = ROUTER_AUTH
 ROUTER_SESSION.verify = False
-ROUTER_SESSION.headers.update({
-    "Content-Type": "text/plain;charset=UTF-8",
-    "Referer": f"{ROUTER_URL}/",
-    "Origin": ROUTER_URL,
-    "User-Agent": "Mozilla/5.0",
-})
+ROUTER_SESSION.headers.update(
+    {
+        "Content-Type": "text/plain;charset=UTF-8",
+        "Referer": f"{ROUTER_URL}/",
+        "Origin": ROUTER_URL,
+        "User-Agent": "Mozilla/5.0",
+    }
+)

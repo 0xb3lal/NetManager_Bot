@@ -16,29 +16,32 @@ change is visible from every other file that imported the same instance.
 """
 
 import asyncio
+
 import db
 from logger import logger
+
 
 class BotState:
 
     def __init__(self):
-        self.threshold       = 3.0
-        self.banned_macs     = set()
-        self.macs_list       = {}
-        self.allowed_macs    = []
-        self.pending_macs    = set()   # MACs still awaiting onboarding (firewall-dropped)
-        self.lockdown_state  = False
+        self.threshold = 3.0
+        self.banned_macs = set()
+        self.macs_list = {}
+        self.allowed_macs = []
+        self.pending_macs = set()  # MACs still awaiting onboarding (firewall-dropped)
+        self.lockdown_state = False
         self.ip_to_mac_cache = {}
 
     def reload_from_db(self):
         """Reload cached state from DB (call at startup and on reconnect)."""
-        self.banned_macs     = db.get_banned()
-        self.macs_list       = db.get_devices()
-        self.allowed_macs    = db.get_allowed()
-        self.pending_macs    = set(db.get_pending_devices())
-        self.threshold       = db.get_threshold()
-        self.lockdown_state  = db.get_lockdown_state()
+        self.banned_macs = db.get_banned()
+        self.macs_list = db.get_devices()
+        self.allowed_macs = db.get_allowed()
+        self.pending_macs = set(db.get_pending_devices())
+        self.threshold = db.get_threshold()
+        self.lockdown_state = db.get_lockdown_state()
         self.ip_to_mac_cache = {}
+
 
 state = BotState()
 
@@ -54,6 +57,7 @@ ROUTER_LOCK = asyncio.Lock()
 QUOTA_LOCK = asyncio.Lock()
 
 ROUTER_LOCK_WAIT_TIMEOUT = 30
+
 
 async def acquire_router_lock_bounded(caller: str) -> bool:
     """Wait up to 30s for ROUTER_LOCK; return True if acquired."""

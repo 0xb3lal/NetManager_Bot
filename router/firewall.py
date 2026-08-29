@@ -1,10 +1,12 @@
 import re
+
 import db
-from logger import logger
-from state import state
 from config import *
-from utils.validators import is_valid_mac
+from logger import logger
 from router.client import run_cmd, run_cmd_output
+from state import state
+from utils.validators import is_valid_mac
+
 
 def _kick_non_allowed_devices():
     output = run_cmd_output(f"wl -i {WIFI_IFACE} assoclist")
@@ -16,6 +18,7 @@ def _kick_non_allowed_devices():
         if mac not in state.allowed_macs:
             logger.info(f"Kicking non-allowed device during lockdown: {mac}")
             run_cmd(f"wl -i {WIFI_IFACE} deauthenticate {mac}")
+
 
 def enable_lockdown(force_lock=False):
     mode = "FORCE (Whitelist only)" if force_lock else "NORMAL (Banning list)"
@@ -30,7 +33,9 @@ def enable_lockdown(force_lock=False):
             if is_valid_mac(mac):
                 run_cmd(f"iptables -A LOCKDOWN -m mac --mac-source {mac} -j ACCEPT")
         run_cmd("iptables -A LOCKDOWN -j DROP")
-        logger.debug(f"Whitelist applied: {len(state.allowed_macs)} devices allowed, others dropped.")
+        logger.debug(
+            f"Whitelist applied: {len(state.allowed_macs)} devices allowed, others dropped."
+        )
     else:
         # dropped unconditionally — fail-safe default until onboarding is done.
         for mac in state.banned_macs:
@@ -55,8 +60,10 @@ def enable_lockdown(force_lock=False):
     if force_lock:
         _kick_non_allowed_devices()
 
+
 def reapply_firewall_state():
     enable_lockdown(force_lock=state.lockdown_state)
+
 
 def ban_mac(mac, reason="manual"):
     mac = mac.upper()
@@ -73,7 +80,10 @@ def ban_mac(mac, reason="manual"):
             f"Internal: {mac} was already banned — ban reason overwritten to '{reason}'."
         )
     else:
-        logger.debug(f"Internal: {mac} already banned with reason '{reason}', nothing to change.")
+        logger.debug(
+            f"Internal: {mac} already banned with reason '{reason}', nothing to change."
+        )
+
 
 def unban_mac(mac):
     mac = mac.upper()

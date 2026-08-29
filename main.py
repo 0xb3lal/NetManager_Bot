@@ -1,45 +1,40 @@
 import asyncio
+
 import discord
 from discord import app_commands
+
 import db
-from logger import logger
-from state import ROUTER_LOCK, state
-from tasks.traffic_check import setup_traffic_check_task
-from tasks.device_discovery import setup_device_discovery_task
-from tasks.daily_usage_monitor import setup_daily_usage_monitor_task
-from tasks.daily_report import setup_daily_network_report_task
-from tasks.midnight_reset import setup_midnight_reset_task
-from tasks.anomaly_check import setup_anomaly_check_task
-from tasks.stale_cleanup import setup_stale_cleanup_task
-from router.firewall import reapply_firewall_state
-from commands.register import setup
-import usage_db
 import telegram.db as telegram_db
 import telegram.discord_bridge as discord_bridge
+import usage_db
+from commands.register import setup
+from config import DISCORD_TOKEN, GUILD_ID
+from logger import logger
+from router.firewall import reapply_firewall_state
+from state import ROUTER_LOCK, state
+from tasks.anomaly_check import setup_anomaly_check_task
+from tasks.daily_report import setup_daily_network_report_task
+from tasks.daily_usage_monitor import setup_daily_usage_monitor_task
+from tasks.device_discovery import setup_device_discovery_task
+from tasks.midnight_reset import setup_midnight_reset_task
+from tasks.stale_cleanup import setup_stale_cleanup_task
+from tasks.traffic_check import setup_traffic_check_task
 from telegram.polling import initialize_telegram_bot, start_telegram_polling
-from config import (
-    DISCORD_TOKEN,
-    GUILD_ID,
-)
 
 db.init_db()
 usage_db.init_usage_tables()
 telegram_db.init_telegram_tables()
 state.reload_from_db()
 
+
 class MyBot(discord.Client):
 
     def __init__(self):
-        super().__init__(
-            intents=discord.Intents.default(),
-            heartbeat_timeout=60.0
-        )
+        super().__init__(intents=discord.Intents.default(), heartbeat_timeout=60.0)
         self.tree = app_commands.CommandTree(self)
 
     async def on_tree_error(
-        self,
-        interaction: discord.Interaction,
-        error: app_commands.AppCommandError
+        self, interaction: discord.Interaction, error: app_commands.AppCommandError
     ):
         if isinstance(error, app_commands.errors.CommandInvokeError):
             cause = error.original
@@ -99,8 +94,7 @@ class MyBot(discord.Client):
 
     async def on_resumed(self):
         logger.info(
-            "Discord Gateway session resumed successfully. "
-            "Bot is fully operational."
+            "Discord Gateway session resumed successfully. " "Bot is fully operational."
         )
 
     async def on_ready(self):
@@ -115,6 +109,7 @@ class MyBot(discord.Client):
 
         async with ROUTER_LOCK:
             await asyncio.to_thread(reapply_firewall_state)
+
 
 async def main():
     """Run bot with auto-restart and exponential backoff."""
@@ -152,6 +147,7 @@ async def main():
             await asyncio.sleep(retry_delay)
             retry_delay = min(retry_delay * 2, max_retry_delay)
             continue
+
 
 if __name__ == "__main__":
     logger.info("--- Starting NetManager Bot ---")

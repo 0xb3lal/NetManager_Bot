@@ -2,14 +2,16 @@
 
 Tests A-F per task spec. Run with: venv/Scripts/python.exe test_static_leases_fix.py
 """
-import sys
 import pathlib
+import sys
 
 # Ensure imports work
 sys.path.insert(0, str(pathlib.Path(__file__).parent))
 
-from router.client import parse_shell_cgi_result, _decode_js_escapes
-from router.static_leases import _parse_raw_entries, _serialize_entry, _normalize_mac, _escape_field
+from router.client import _decode_js_escapes, parse_shell_cgi_result
+from router.static_leases import (_escape_field, _normalize_mac,
+                                  _parse_raw_entries, _serialize_entry)
+
 
 def assert_eq(actual, expected, msg=""):
     if actual != expected:

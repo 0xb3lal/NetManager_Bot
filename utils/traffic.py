@@ -22,8 +22,10 @@ def parse_traffic_to_gb(traffic_str):
 
     return value
 
+
 def bytes_to_mb(value):
     return value / (1024 * 1024)
+
 
 def format_data_size(value_gb):
     if value_gb >= 1:

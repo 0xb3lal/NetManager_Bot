@@ -16,6 +16,7 @@ async def ensure_admin(interaction: discord.Interaction) -> bool:
     )
     return False
 
+
 async def safe_defer(interaction: discord.Interaction, thinking: bool = False) -> bool:
     if interaction.response.is_done():
         return True
@@ -25,7 +26,9 @@ async def safe_defer(interaction: discord.Interaction, thinking: bool = False) -
     except discord.errors.HTTPException as e:
         cmd = interaction.command.name if interaction.command else "?"
         if e.code == 40060:
-            logger.warning(f"Interaction already acknowledged for /{cmd} (40060), continuing.")
+            logger.warning(
+                f"Interaction already acknowledged for /{cmd} (40060), continuing."
+            )
             return True
         elif e.code == 10062:
             logger.warning(f"Unknown/expired interaction for /{cmd} (10062), aborting.")

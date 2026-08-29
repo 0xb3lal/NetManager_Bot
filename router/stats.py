@@ -1,8 +1,6 @@
+from config import ROUTER_SESSION, ROUTER_URL
 from logger import logger
-from config import (
-    ROUTER_URL,
-    ROUTER_SESSION
-)
+
 
 def reset_ip_traffic_stats():
     headers = {"Content-Type": "application/x-www-form-urlencoded"}
@@ -13,15 +11,20 @@ def reset_ip_traffic_stats():
         "&cstats_exclude=&f_all=on&cstats_labels=0&_http_id=TIDe5b1505eeac7f67f"
     )
     try:
-        response = ROUTER_SESSION.post(f"{ROUTER_URL}/tomato.cgi", headers=headers, data=data, timeout=30)
+        response = ROUTER_SESSION.post(
+            f"{ROUTER_URL}/tomato.cgi", headers=headers, data=data, timeout=30
+        )
         if response.status_code == 200:
             logger.info("IP Traffic stats reset successfully.")
             return True
-        logger.error(f"IP Traffic stats reset failed with status {response.status_code}")
+        logger.error(
+            f"IP Traffic stats reset failed with status {response.status_code}"
+        )
         return False
     except Exception as e:
         logger.error(f"Error resetting IP Traffic stats: {e}")
         return False
+
 
 def reset_bandwidth_stats():
     headers = {"Content-Type": "application/x-www-form-urlencoded"}
@@ -32,7 +35,9 @@ def reset_bandwidth_stats():
         "&rstats_offset=1&rstats_exclude=&_http_id=TIDe5b1505eeac7f67f"
     )
     try:
-        response = ROUTER_SESSION.post(f"{ROUTER_URL}/tomato.cgi", headers=headers, data=data, timeout=30)
+        response = ROUTER_SESSION.post(
+            f"{ROUTER_URL}/tomato.cgi", headers=headers, data=data, timeout=30
+        )
         if response.status_code == 200:
             logger.info("Bandwidth stats reset successfully.")
             return True

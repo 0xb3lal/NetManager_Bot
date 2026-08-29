@@ -5,11 +5,12 @@ import db
 from logger import logger
 from utils.discord import safe_defer
 
+
 def setup(bot):
 
     @bot.tree.command(
         name="pending",
-        description="List devices still awaiting onboarding (blocked until reviewed)"
+        description="List devices still awaiting onboarding (blocked until reviewed)",
     )
     @app_commands.checks.has_permissions(administrator=True)
     async def pending(interaction: discord.Interaction):
@@ -34,10 +35,12 @@ def setup(bot):
             embed = discord.Embed(
                 title=f"`📋` Devices Pending Onboarding ({len(pending_devices)})",
                 description=msg,
-                color=embed_color
+                color=embed_color,
             )
 
-            embed.set_footer(text="Pending devices are blocked until allowed via /wl add.")
+            embed.set_footer(
+                text="Pending devices are blocked until allowed via /wl add."
+            )
 
             await interaction.followup.send(embed=embed)
 

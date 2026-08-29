@@ -1,14 +1,17 @@
 import asyncio
+
 import discord
-import db
 from discord.ext import tasks
-from logger import logger
-from state import ROUTER_LOCK, state, acquire_router_lock_bounded
+
+import db
 from config import CHANNEL_ID
+from logger import logger
 from router.firewall import enable_lockdown
 from services.traffic import get_today_usage_by_mac
-from utils.traffic import format_data_size
+from state import ROUTER_LOCK, acquire_router_lock_bounded, state
 from telegram.alerts import check_and_send_threshold_alerts
+from utils.traffic import format_data_size
+
 
 def setup_daily_usage_monitor_task(bot):
 
@@ -20,11 +23,16 @@ def setup_daily_usage_monitor_task(bot):
     @daily_usage_monitor_task.before_loop
     async def before_daily_usage_monitor():
         await bot.wait_until_ready()
-        logger.info("Daily usage monitor task ready. Waiting 30s to avoid startup collision...")
+        logger.info(
+            "Daily usage monitor task ready. Waiting 30s to avoid startup collision..."
+        )
         await asyncio.sleep(30)
-        logger.info("Daily usage monitor task started (checks per-device usage every 10 minutes).")
+        logger.info(
+            "Daily usage monitor task started (checks per-device usage every 10 minutes)."
+        )
 
     return daily_usage_monitor_task
+
 
 async def _run_daily_usage_monitor_check(bot):
     """Check device usage and enforce daily limits."""
@@ -76,9 +84,11 @@ async def _run_daily_usage_monitor_check(bot):
                         embed = discord.Embed(
                             title="`⚠️` Whitelisted Device Over Daily Limit",
                             description=status_box,
-                            color=0xe67e22
+                            color=0xE67E22,
                         )
-                        embed.set_footer(text="Whitelisted devices are never blocked automatically.")
+                        embed.set_footer(
+                            text="Whitelisted devices are never blocked automatically."
+                        )
                         await channel.send(embed=embed)
                 continue
 
@@ -91,7 +101,8 @@ async def _run_daily_usage_monitor_check(bot):
         if devices_to_ban:
             async with ROUTER_LOCK:
                 ban_now = [
-                    entry for entry in devices_to_ban
+                    entry
+                    for entry in devices_to_ban
                     if entry[0] not in state.banned_macs
                     and entry[0] not in state.allowed_macs
                     and db.device_exists(entry[0])
@@ -101,11 +112,15 @@ async def _run_daily_usage_monitor_check(bot):
                     db.ban_device(mac, reason="daily_limit")
 
                 if ban_now:
-                    await asyncio.to_thread(enable_lockdown, force_lock=state.lockdown_state)
+                    await asyncio.to_thread(
+                        enable_lockdown, force_lock=state.lockdown_state
+                    )
 
             # --- Phase 4 (no lock): Discord notifications ---
             for mac, device_name, usage_gb, effective_limit in ban_now:
-                logger.info(f"Auto-blocked {mac} for exceeding daily limit ({usage_gb:.2f}GB / {effective_limit:.2f}GB).")
+                logger.info(
+                    f"Auto-blocked {mac} for exceeding daily limit ({usage_gb:.2f}GB / {effective_limit:.2f}GB)."
+                )
                 if channel:
                     status_box = (
                         f"```\n"
@@ -117,7 +132,7 @@ async def _run_daily_usage_monitor_check(bot):
                     embed = discord.Embed(
                         title="`🚫` Device Auto-Blocked (Daily Limit)",
                         description=status_box,
-                        color=0xff4747
+                        color=0xFF4747,
                     )
                     await channel.send(embed=embed)
 

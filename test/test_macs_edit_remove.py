@@ -3,16 +3,17 @@
 Covers A-R per plan.
 Run: venv/Scripts/python.exe test_macs_edit_remove.py
 """
-import tempfile
+import asyncio
 import pathlib
 import sqlite3
-import asyncio
-from unittest.mock import patch, MagicMock, AsyncMock
+import tempfile
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import db
 import state as state_mod
 import usage_db
 from router.devices import _recently_migrated, _recently_removed
+
 
 def setup_temp_db():
     tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".db")
@@ -153,6 +154,7 @@ def test_D_block_new_after_edit():
         state_mod.state.macs_list[new] = state_mod.state.macs_list.pop(old)
         # Simulate /blk on new
         from router.firewall import ban_mac
+
         # Mock enable_lockdown to avoid router calls
         with patch("router.firewall.enable_lockdown"):
             ban_mac(new, reason="manual")
@@ -265,7 +267,7 @@ def test_J_pending_onboarding():
         db.add_device(old, "HostA")  # pending by default
         state_mod.state.pending_macs.add(old)
         state_mod.state.macs_list[old] = "HostA"
-        from services.onboarding import _sessions, OnboardingSession
+        from services.onboarding import OnboardingSession, _sessions
         sess = OnboardingSession(old, "HostA", "192.168.1.10")
         _sessions[old] = sess
         db.migrate_device_mac(old, new)

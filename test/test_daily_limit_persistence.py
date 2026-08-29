@@ -9,11 +9,12 @@ Covers:
 - switching persistent -> today_only and vice versa
 - explicit reset still works
 """
-import tempfile
 import pathlib
+import tempfile
 from unittest.mock import patch
 
 import db
+
 
 def setup_temp_db():
     tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".db")

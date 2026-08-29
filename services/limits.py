@@ -1,14 +1,17 @@
 import asyncio
+
 import discord
+
 import db
-import usage_db
-import telegram.db as telegram_db
 import telegram.client as telegram_client
+import telegram.db as telegram_db
+import usage_db
 from config import CHANNEL_ID
-from state import state, ROUTER_LOCK, QUOTA_LOCK
-from services.traffic import get_today_usage_by_mac
 from router.firewall import unban_mac
+from services.traffic import get_today_usage_by_mac
+from state import QUOTA_LOCK, ROUTER_LOCK, state
 from utils.traffic import format_data_size
+
 
 async def recheck_device_after_limit_change(bot_instance, mac):
     """Re-check device usage and auto-unban if now under limit."""
@@ -44,10 +47,11 @@ async def recheck_device_after_limit_change(bot_instance, mac):
         embed = discord.Embed(
             title="`✅` Device Auto-Unblocked (Limit Increased)",
             description=status_box,
-            color=0x2ecc71
+            color=0x2ECC71,
         )
 
         await channel.send(embed=embed)
+
 
 async def recheck_default_limit_devices(bot_instance):
     """Auto-unban devices now under the default limit."""
@@ -55,11 +59,7 @@ async def recheck_default_limit_devices(bot_instance):
     daily_banned = db.get_banned_by_reason("daily_limit")
     overrides = db.get_all_device_daily_limits()
 
-    candidates = [
-        mac
-        for mac in daily_banned
-        if mac not in overrides
-    ]
+    candidates = [mac for mac in daily_banned if mac not in overrides]
 
     if not candidates:
         return
@@ -96,10 +96,11 @@ async def recheck_default_limit_devices(bot_instance):
             embed = discord.Embed(
                 title="`✅` Device Auto-Unblocked (Limit Increased)",
                 description=status_box,
-                color=0x2ecc71
+                color=0x2ECC71,
             )
 
             await channel.send(embed=embed)
+
 
 async def add_extra_quota_covering_overage(bot_instance, mac, amount_gb):
     """Grant extra quota as fresh headroom over current usage; fails closed on DB error."""

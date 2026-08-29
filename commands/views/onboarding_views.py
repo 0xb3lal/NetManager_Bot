@@ -18,28 +18,28 @@ import asyncio
 import discord
 
 import db
-from logger import logger
-from state import state, ROUTER_LOCK
-from router.firewall import ban_mac, unban_mac, enable_lockdown
-from services.onboarding_sessions import (
-    OnboardingSession,
-    _sessions,
-    drop_session,
-    _device_gone,
-    _gone_notice,
-    _device_name,
-    ONBOARDING_STEP_TIMEOUT,
-)
 from commands.views.onboarding_embeds import (
-    _info_box,
-    _COLOR_NEW,
     _COLOR_BLOCK,
-    _whitelist_question_embed,
-    _name_question_embed,
+    _COLOR_NEW,
     _allowed_ack_embed,
     _blocked_ack_embed,
+    _info_box,
+    _name_question_embed,
     _processing_embed,
+    _whitelist_question_embed,
 )
+from logger import logger
+from router.firewall import ban_mac, enable_lockdown, unban_mac
+from services.onboarding_sessions import (
+    ONBOARDING_STEP_TIMEOUT,
+    OnboardingSession,
+    _device_gone,
+    _device_name,
+    _gone_notice,
+    _sessions,
+    drop_session,
+)
+from state import ROUTER_LOCK, state
 from utils.discord import ensure_admin
 
 
@@ -57,9 +57,15 @@ class _OnboardingBaseView(discord.ui.View):
         # Fail-safe: unanswered simply leaves the device PENDING => blocked.
         # Only the view whose step is still current may time the flow out.
         session = self.session
-        if _sessions.get(session.mac) is not session or session.step != self.step_tag or session.busy:
+        if (
+            _sessions.get(session.mac) is not session
+            or session.step != self.step_tag
+            or session.busy
+        ):
             if session.busy:
-                logger.debug(f"Onboarding on_timeout suppressed for {session.mac}: busy")
+                logger.debug(
+                    f"Onboarding on_timeout suppressed for {session.mac}: busy"
+                )
             return
         try:
             await session.message.edit(
@@ -71,7 +77,9 @@ class _OnboardingBaseView(discord.ui.View):
                 view=None,
             )
         except Exception as e:
-            logger.warning(f"Could not edit timed-out onboarding message for {session.mac}: {e}")
+            logger.warning(
+                f"Could not edit timed-out onboarding message for {session.mac}: {e}"
+            )
         drop_session(session.mac)
 
 
@@ -107,10 +115,13 @@ class OnboardingQ1View(_OnboardingBaseView):
             return
         placeholder = discord.Embed(
             title="`⏳` Allowing Device…",
-            description=_info_box([
-                ("Device:", _device_name(session.mac)),
-                ("MAC:", session.mac),
-            ]) + "\nPlease wait…",
+            description=_info_box(
+                [
+                    ("Device:", _device_name(session.mac)),
+                    ("MAC:", session.mac),
+                ]
+            )
+            + "\nPlease wait…",
             color=_COLOR_NEW,
         )
         try:
@@ -149,10 +160,13 @@ class OnboardingQ1View(_OnboardingBaseView):
                         message_id=session.message.id,
                         embed=discord.Embed(
                             title="`⚠️` Update Failed",
-                            description=_info_box([
-                                ("Device:", _device_name(session.mac)),
-                                ("MAC:", session.mac),
-                            ]) + f"\nDatabase error: {e}\nUse /pending to retry manually.",
+                            description=_info_box(
+                                [
+                                    ("Device:", _device_name(session.mac)),
+                                    ("MAC:", session.mac),
+                                ]
+                            )
+                            + f"\nDatabase error: {e}\nUse /pending to retry manually.",
                             color=_COLOR_BLOCK,
                         ),
                         view=None,
@@ -169,7 +183,9 @@ class OnboardingQ1View(_OnboardingBaseView):
                     if session.mac in state.banned_macs:
                         await asyncio.to_thread(unban_mac, session.mac)
                     else:
-                        await asyncio.to_thread(enable_lockdown, force_lock=state.lockdown_state)
+                        await asyncio.to_thread(
+                            enable_lockdown, force_lock=state.lockdown_state
+                        )
 
             async def _on_success():
                 session.step = "q2"
@@ -180,7 +196,9 @@ class OnboardingQ1View(_OnboardingBaseView):
                     view=OnboardingQ2View(session),
                 )
 
-            ok = await _run_router_with_retry(session, interaction, "q1_allow", _router_work, _on_success)
+            ok = await _run_router_with_retry(
+                session, interaction, "q1_allow", _router_work, _on_success
+            )
             if not ok:
                 return
         finally:
@@ -214,10 +232,13 @@ class OnboardingQ1View(_OnboardingBaseView):
             return
         placeholder = discord.Embed(
             title="`⏳` Blocking Device…",
-            description=_info_box([
-                ("Device:", _device_name(session.mac)),
-                ("MAC:", session.mac),
-            ]) + "\nPlease wait…",
+            description=_info_box(
+                [
+                    ("Device:", _device_name(session.mac)),
+                    ("MAC:", session.mac),
+                ]
+            )
+            + "\nPlease wait…",
             color=_COLOR_NEW,
         )
         try:
@@ -255,10 +276,13 @@ class OnboardingQ1View(_OnboardingBaseView):
                         message_id=session.message.id,
                         embed=discord.Embed(
                             title="`⚠️` Update Failed",
-                            description=_info_box([
-                                ("Device:", _device_name(session.mac)),
-                                ("MAC:", session.mac),
-                            ]) + f"\nDatabase error: {e}\nUse /pending to retry manually.",
+                            description=_info_box(
+                                [
+                                    ("Device:", _device_name(session.mac)),
+                                    ("MAC:", session.mac),
+                                ]
+                            )
+                            + f"\nDatabase error: {e}\nUse /pending to retry manually.",
                             color=_COLOR_BLOCK,
                         ),
                         view=None,
@@ -293,7 +317,9 @@ class OnboardingQ1View(_OnboardingBaseView):
                         view=OnboardingQ3View(session),
                     )
 
-            ok = await _run_router_with_retry(session, interaction, "q1_block", _router_work, _on_success)
+            ok = await _run_router_with_retry(
+                session, interaction, "q1_block", _router_work, _on_success
+            )
             if not ok:
                 return
         finally:
@@ -307,7 +333,9 @@ class OnboardingQ2View(_OnboardingBaseView):
         super().__init__(session, step_tag="q2")
 
     @discord.ui.button(label="✅ Yes / Whitelist", style=discord.ButtonStyle.success)
-    async def whitelist_yes(self, interaction: discord.Interaction, button: discord.ui.Button):
+    async def whitelist_yes(
+        self, interaction: discord.Interaction, button: discord.ui.Button
+    ):
         for c in self.children:
             c.disabled = True
         session = self.session
@@ -333,10 +361,13 @@ class OnboardingQ2View(_OnboardingBaseView):
             return
         placeholder = discord.Embed(
             title="`⏳` Whitelisting…",
-            description=_info_box([
-                ("Device:", _device_name(session.mac)),
-                ("MAC:", session.mac),
-            ]) + "\nPlease wait…",
+            description=_info_box(
+                [
+                    ("Device:", _device_name(session.mac)),
+                    ("MAC:", session.mac),
+                ]
+            )
+            + "\nPlease wait…",
             color=_COLOR_NEW,
         )
         try:
@@ -373,10 +404,13 @@ class OnboardingQ2View(_OnboardingBaseView):
                         message_id=session.message.id,
                         embed=discord.Embed(
                             title="`⚠️` Update Failed",
-                            description=_info_box([
-                                ("Device:", _device_name(session.mac)),
-                                ("MAC:", session.mac),
-                            ]) + f"\nDatabase error: {e}\nUse /pending to retry manually.",
+                            description=_info_box(
+                                [
+                                    ("Device:", _device_name(session.mac)),
+                                    ("MAC:", session.mac),
+                                ]
+                            )
+                            + f"\nDatabase error: {e}\nUse /pending to retry manually.",
                             color=_COLOR_BLOCK,
                         ),
                         view=None,
@@ -390,14 +424,18 @@ class OnboardingQ2View(_OnboardingBaseView):
 
             async def _router_work():
                 async with ROUTER_LOCK:
-                    await asyncio.to_thread(enable_lockdown, force_lock=state.lockdown_state)
+                    await asyncio.to_thread(
+                        enable_lockdown, force_lock=state.lockdown_state
+                    )
 
             async def _on_success():
                 session.whitelisted = True
                 session.step = "q3"
                 if _device_name(session.mac).lower() != "unknown":
                     session.step = "done"
-                    logger.info(f"Onboarding complete: {session.mac} ALLOWED (whitelisted={session.whitelisted}).")
+                    logger.info(
+                        f"Onboarding complete: {session.mac} ALLOWED (whitelisted={session.whitelisted})."
+                    )
                     await interaction.followup.edit_message(
                         message_id=session.message.id,
                         embed=_allowed_ack_embed(session),
@@ -411,7 +449,9 @@ class OnboardingQ2View(_OnboardingBaseView):
                         view=OnboardingQ3View(session),
                     )
 
-            ok = await _run_router_with_retry(session, interaction, "q2_whitelist", _router_work, _on_success)
+            ok = await _run_router_with_retry(
+                session, interaction, "q2_whitelist", _router_work, _on_success
+            )
             if not ok:
                 return
         finally:
@@ -419,7 +459,9 @@ class OnboardingQ2View(_OnboardingBaseView):
             self.stop()
 
     @discord.ui.button(label="❌ No", style=discord.ButtonStyle.secondary)
-    async def whitelist_no(self, interaction: discord.Interaction, button: discord.ui.Button):
+    async def whitelist_no(
+        self, interaction: discord.Interaction, button: discord.ui.Button
+    ):
         for c in self.children:
             c.disabled = True
         session = self.session
@@ -453,7 +495,9 @@ class OnboardingQ2View(_OnboardingBaseView):
         session.step = "q3"
         if _device_name(session.mac).lower() != "unknown":
             session.step = "done"
-            logger.info(f"Onboarding complete: {session.mac} ALLOWED (whitelisted={session.whitelisted}).")
+            logger.info(
+                f"Onboarding complete: {session.mac} ALLOWED (whitelisted={session.whitelisted})."
+            )
             try:
                 await interaction.followup.edit_message(
                     message_id=session.message.id,
@@ -481,15 +525,20 @@ class OnboardingQ3View(_OnboardingBaseView):
         super().__init__(session, step_tag="q3")
 
     @discord.ui.button(label="✏️ Enter Name", style=discord.ButtonStyle.primary)
-    async def enter_name(self, interaction: discord.Interaction, button: discord.ui.Button):
+    async def enter_name(
+        self, interaction: discord.Interaction, button: discord.ui.Button
+    ):
         for c in self.children:
             c.disabled = True
         # Local import — modal lives in commands/views/onboarding_modals.py (views→views, safe)
         from commands.views.onboarding_modals import RenameModal
+
         await interaction.response.send_modal(RenameModal(self.session))
 
     @discord.ui.button(label="❓ Keep Unknown", style=discord.ButtonStyle.secondary)
-    async def keep_unknown(self, interaction: discord.Interaction, button: discord.ui.Button):
+    async def keep_unknown(
+        self, interaction: discord.Interaction, button: discord.ui.Button
+    ):
         for c in self.children:
             c.disabled = True
         session = self.session
@@ -516,9 +565,13 @@ class OnboardingQ3View(_OnboardingBaseView):
         # Single edit, no background I/O
         if session.context == "allowed":
             session.step = "done"
-            logger.info(f"Onboarding complete: {session.mac} ALLOWED (whitelisted={session.whitelisted}, keep unknown).")
+            logger.info(
+                f"Onboarding complete: {session.mac} ALLOWED (whitelisted={session.whitelisted}, keep unknown)."
+            )
             try:
-                await interaction.response.edit_message(embed=_allowed_ack_embed(session), view=None)
+                await interaction.response.edit_message(
+                    embed=_allowed_ack_embed(session), view=None
+                )
             except Exception as e:
                 logger.error(f"Failed to send onboarding ack for {session.mac}: {e}")
             drop_session(session.mac)
@@ -526,7 +579,9 @@ class OnboardingQ3View(_OnboardingBaseView):
             session.step = "done"
             logger.info(f"Onboarding complete: {session.mac} BLOCKED (keep unknown).")
             try:
-                await interaction.response.edit_message(embed=_blocked_ack_embed(session), view=None)
+                await interaction.response.edit_message(
+                    embed=_blocked_ack_embed(session), view=None
+                )
             except Exception as e:
                 logger.error(f"Failed to send onboarding ack for {session.mac}: {e}")
             drop_session(session.mac)

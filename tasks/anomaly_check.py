@@ -5,17 +5,18 @@ from discord.ext import tasks
 
 import db
 from config import (
+    ANOMALY_CHECK_INTERVAL_MINUTES,
     CHANNEL_ID,
     UNKNOWN_HOSTNAME_TRAFFIC_THRESHOLD_MB,
-    ANOMALY_CHECK_INTERVAL_MINUTES,
 )
 from logger import logger
-from state import state, ROUTER_LOCK, acquire_router_lock_bounded
 from router.firewall import ban_mac, unban_mac
 from services.traffic import get_today_usage_by_mac
+from state import ROUTER_LOCK, acquire_router_lock_bounded, state
 from utils.traffic import format_data_size
 
 ANOMALY_PROMPT_TIMEOUT = 1800  # seconds the Recognized/Suspicious question waits
+
 
 def setup_anomaly_check_task(bot):
     """Create unknown-hostname traffic anomaly task."""
@@ -67,11 +68,10 @@ def setup_anomaly_check_task(bot):
                 # Re-verify under the lock: admins may have resolved the
                 # device while this cycle was scanning.
                 async with ROUTER_LOCK:
-                    if (
-                        mac in state.allowed_macs
-                        or mac in state.pending_macs
-                    ):
-                        logger.debug(f"Anomaly skipped {mac} (state changed since scan).")
+                    if mac in state.allowed_macs or mac in state.pending_macs:
+                        logger.debug(
+                            f"Anomaly skipped {mac} (state changed since scan)."
+                        )
                         continue
                     if mac not in state.banned_macs:
                         # ban_mac() itself rebuilds the firewall rules.
@@ -117,6 +117,7 @@ def setup_anomaly_check_task(bot):
 
     return anomaly_check_task
 
+
 def _anomaly_embed(mac: str, usage_gb: float, threshold_gb: float) -> discord.Embed:
     embed = discord.Embed(
         title="`⚠️` Unknown Device Using Data",
@@ -132,6 +133,7 @@ def _anomaly_embed(mac: str, usage_gb: float, threshold_gb: float) -> discord.Em
     )
     embed.set_footer(text="Device blocked pending your review.")
     return embed
+
 
 class AnomalyView(discord.ui.View):
     """Anomaly prompt: Recognized -> whitelist+unblock, Suspicious -> stay blocked."""
@@ -167,10 +169,14 @@ class AnomalyView(discord.ui.View):
                     view=None,
                 )
             except Exception as e:
-                logger.warning(f"Could not edit timed-out anomaly prompt for {self.mac}: {e}")
+                logger.warning(
+                    f"Could not edit timed-out anomaly prompt for {self.mac}: {e}"
+                )
 
     @discord.ui.button(label="✅ Recognized — Allow", style=discord.ButtonStyle.success)
-    async def recognized(self, interaction: discord.Interaction, button: discord.ui.Button):
+    async def recognized(
+        self, interaction: discord.Interaction, button: discord.ui.Button
+    ):
         if self._device_gone():
             await self._gone_notice(interaction)
             return
@@ -183,7 +189,7 @@ class AnomalyView(discord.ui.View):
             if self.mac not in state.allowed_macs:
                 state.allowed_macs.append(self.mac)
             if self.mac in state.banned_macs:
-                await asyncio.to_thread(unban_mac, self.mac)   # rebuilds firewall itself
+                await asyncio.to_thread(unban_mac, self.mac)  # rebuilds firewall itself
             else:
                 await asyncio.to_thread(
                     enable_lockdown, force_lock=state.lockdown_state
@@ -204,8 +210,12 @@ class AnomalyView(discord.ui.View):
         embed.set_footer(text="Applies immediately.")
         await self.message.edit(embed=embed, view=None)
 
-    @discord.ui.button(label="🚫 Suspicious — Keep Blocked", style=discord.ButtonStyle.danger)
-    async def suspicious(self, interaction: discord.Interaction, button: discord.ui.Button):
+    @discord.ui.button(
+        label="🚫 Suspicious — Keep Blocked", style=discord.ButtonStyle.danger
+    )
+    async def suspicious(
+        self, interaction: discord.Interaction, button: discord.ui.Button
+    ):
         if self._device_gone():
             await self._gone_notice(interaction)
             return

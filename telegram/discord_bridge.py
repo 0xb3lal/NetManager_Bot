@@ -11,19 +11,23 @@ every function call.
 
 import discord
 
-from logger import logger
 from config import CHANNEL_ID
+from logger import logger
 
 _bot_instance = None
+
 
 def set_bot_instance(bot):
     global _bot_instance
     _bot_instance = bot
 
+
 async def notify_admin_new_telegram_user(chat_id: str, first_name: str):
     """Notify admin Discord channel about new unlinked Telegram user."""
     if _bot_instance is None:
-        logger.warning("Discord bot instance not set — can't notify admin of new Telegram user.")
+        logger.warning(
+            "Discord bot instance not set — can't notify admin of new Telegram user."
+        )
         return
 
     channel = _bot_instance.get_channel(CHANNEL_ID)
@@ -40,8 +44,10 @@ async def notify_admin_new_telegram_user(chat_id: str, first_name: str):
     embed = discord.Embed(
         title="`📨` New Telegram User",
         description=status_box + "\nUse `/tglink` to link this chat to a device.",
-        color=0x3498db
+        color=0x3498DB,
     )
 
     await channel.send(embed=embed)
-    logger.info(f"Notified admin on Discord about new Telegram user: {first_name} (chat_id={chat_id})")
+    logger.info(
+        f"Notified admin on Discord about new Telegram user: {first_name} (chat_id={chat_id})"
+    )

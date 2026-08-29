@@ -11,12 +11,13 @@ from config import (
     STALE_DEVICE_THRESHOLD_DAYS,
 )
 from logger import logger
-from state import state, ROUTER_LOCK, acquire_router_lock_bounded
 from services.onboarding import drop_session
+from state import ROUTER_LOCK, acquire_router_lock_bounded, state
 
 STALE_RETRY_INTERVAL = 45 * 60  # 45 minutes
 STALE_MAX_ATTEMPTS = 3
 _stale_retry_running = False
+
 
 async def _run_stale_cleanup_once():
     """Scan and purge devices unseen for threshold; None if lock busy."""
@@ -70,6 +71,7 @@ async def _run_stale_cleanup_once():
         except Exception:
             pass
 
+
 async def _send_stale_success(channel, removed):
     try:
         if not removed:
@@ -77,7 +79,9 @@ async def _send_stale_success(channel, removed):
             # Optional: still notify? Existing behavior logs only, no embed when nothing. Keep same.
             return True
         if not channel:
-            logger.info(f"Stale cleanup success: {len(removed)} removed but no channel found.")
+            logger.info(
+                f"Stale cleanup success: {len(removed)} removed but no channel found."
+            )
             return True
         lines = "\n".join(
             f"{hostname[:18].ljust(18)} {mac}   last seen {raw[:10]}"
@@ -98,10 +102,14 @@ async def _send_stale_success(channel, removed):
         for attempt in range(3):
             try:
                 await channel.send(embed=embed)
-                logger.info(f"Stale device cleanup completed: {len(removed)} device(s) removed.")
+                logger.info(
+                    f"Stale device cleanup completed: {len(removed)} device(s) removed."
+                )
                 return True
             except Exception as e:
-                logger.warning(f"Stale cleanup success notification attempt {attempt+1}/3 failed: {e}")
+                logger.warning(
+                    f"Stale cleanup success notification attempt {attempt+1}/3 failed: {e}"
+                )
                 if attempt < 2:
                     await asyncio.sleep(2 * (attempt + 1))
         # Auditability: deletion already succeeded, ensure details survive in logs even though Discord failed
@@ -114,10 +122,13 @@ async def _send_stale_success(channel, removed):
         logger.error(f"Error sending stale success notification: {e}")
         return False
 
+
 async def _send_stale_failure(channel, last_error):
     try:
         if not channel:
-            logger.error(f"Stale cleanup failed after {STALE_MAX_ATTEMPTS} attempts: {last_error} (no channel)")
+            logger.error(
+                f"Stale cleanup failed after {STALE_MAX_ATTEMPTS} attempts: {last_error} (no channel)"
+            )
             return
         embed = discord.Embed(
             title="`❌` Stale Cleanup Failed",
@@ -126,7 +137,7 @@ async def _send_stale_failure(channel, last_error):
                 f"over ~90 minutes.\n"
                 f"```\n{str(last_error)[:400]}\n```"
             ),
-            color=0xe74c3c,
+            color=0xE74C3C,
         )
         embed.set_footer(text="Will retry at next scheduled interval.")
         for attempt in range(3):
@@ -134,12 +145,15 @@ async def _send_stale_failure(channel, last_error):
                 await channel.send(embed=embed)
                 return
             except Exception as e:
-                logger.warning(f"Stale failure notification attempt {attempt+1}/3 failed: {e}")
+                logger.warning(
+                    f"Stale failure notification attempt {attempt+1}/3 failed: {e}"
+                )
                 if attempt < 2:
                     await asyncio.sleep(2 * (attempt + 1))
         logger.error("Failed to send stale cleanup failure notification")
     except Exception as e:
         logger.error(f"Error sending stale failure notification: {e}")
+
 
 async def _retry_stale_cleanup(channel, first_error):
     global _stale_retry_running
@@ -147,12 +161,16 @@ async def _retry_stale_cleanup(channel, first_error):
     try:
         for attempt in range(2, STALE_MAX_ATTEMPTS + 1):
             await asyncio.sleep(STALE_RETRY_INTERVAL)
-            logger.info(f"Retrying stale cleanup (attempt {attempt}/{STALE_MAX_ATTEMPTS})...")
+            logger.info(
+                f"Retrying stale cleanup (attempt {attempt}/{STALE_MAX_ATTEMPTS})..."
+            )
             try:
                 removed = await _run_stale_cleanup_once()
                 if removed is None:
                     # Lock busy is not failure, treat as success with no removal?
-                    logger.info("Stale cleanup retry skipped (lock busy), treating as success")
+                    logger.info(
+                        "Stale cleanup retry skipped (lock busy), treating as success"
+                    )
                     return
                 # Success
                 await _send_stale_success(channel, removed)
@@ -163,10 +181,13 @@ async def _retry_stale_cleanup(channel, first_error):
                 logger.error(f"Stale cleanup retry attempt {attempt} failed: {e}")
                 continue
         # All retries exhausted
-        logger.error(f"Stale cleanup failed after {STALE_MAX_ATTEMPTS} attempts over ~90 minutes: {last_error}")
+        logger.error(
+            f"Stale cleanup failed after {STALE_MAX_ATTEMPTS} attempts over ~90 minutes: {last_error}"
+        )
         await _send_stale_failure(channel, last_error)
     finally:
         _stale_retry_running = False
+
 
 def setup_stale_cleanup_task(bot):
 
@@ -187,7 +208,9 @@ def setup_stale_cleanup_task(bot):
                 _stale_retry_running = True
                 asyncio.create_task(_retry_stale_cleanup(channel, e))
             else:
-                logger.warning("Stale retry already running, skipping duplicate trigger")
+                logger.warning(
+                    "Stale retry already running, skipping duplicate trigger"
+                )
 
     @stale_cleanup_task.before_loop
     async def before_stale_cleanup():

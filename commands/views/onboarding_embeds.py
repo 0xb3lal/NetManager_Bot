@@ -25,7 +25,7 @@ def _info_box(lines: list[tuple[str, str]]) -> str:
 
 
 def _kickoff_embed(session) -> discord.Embed:
-    from config import RSSI_DISPLAY_ENABLED, DISTANCE_ESTIMATION_ENABLED
+    from config import DISTANCE_ESTIMATION_ENABLED, RSSI_DISPLAY_ENABLED
 
     lines = [
         ("Device:", session.hostname),
@@ -55,10 +55,12 @@ def _whitelist_question_embed(session) -> discord.Embed:
     embed = discord.Embed(
         title="`⭐` Add to Whitelist?",
         description=(
-            _info_box([
-                ("Device:", _device_name(session.mac)),
-                ("MAC:", session.mac),
-            ])
+            _info_box(
+                [
+                    ("Device:", _device_name(session.mac)),
+                    ("MAC:", session.mac),
+                ]
+            )
             + "\nAdd this device to the whitelist?\nWhitelisted devices bypass daily caps and survive system-wide lockdowns."
         ),
         color=_COLOR_NEW,
@@ -71,10 +73,12 @@ def _name_question_embed(session) -> discord.Embed:
     embed = discord.Embed(
         title="`✏️` Name This Device",
         description=(
-            _info_box([
-                ("Device:", _device_name(session.mac)),
-                ("MAC:", session.mac),
-            ])
+            _info_box(
+                [
+                    ("Device:", _device_name(session.mac)),
+                    ("MAC:", session.mac),
+                ]
+            )
             + "\nAssign a custom name now?"
         ),
         color=_COLOR_NEW,
@@ -84,28 +88,36 @@ def _name_question_embed(session) -> discord.Embed:
 
 
 def _allowed_ack_embed(session) -> discord.Embed:
-    whitelist_value = "Yes — bypasses daily caps, survives lockdowns" if session.whitelisted else "No"
+    whitelist_value = (
+        "Yes — bypasses daily caps, survives lockdowns" if session.whitelisted else "No"
+    )
     embed = discord.Embed(
         title="`✅` Device Allowed",
-        description=_info_box([
-            ("Device:", session.named or _device_name(session.mac)),
-            ("MAC:", session.mac),
-            ("Whitelisted:", whitelist_value),
-        ]),
+        description=_info_box(
+            [
+                ("Device:", session.named or _device_name(session.mac)),
+                ("MAC:", session.mac),
+                ("Whitelisted:", whitelist_value),
+            ]
+        ),
         color=_COLOR_OK,
     )
-    embed.set_footer(text="Whitelisted devices bypass daily caps and survive lockdowns. Applies immediately.")
+    embed.set_footer(
+        text="Whitelisted devices bypass daily caps and survive lockdowns. Applies immediately."
+    )
     return embed
 
 
 def _blocked_ack_embed(session) -> discord.Embed:
     embed = discord.Embed(
         title="`🚫` Device Blocked",
-        description=_info_box([
-            ("Device:", session.named or _device_name(session.mac)),
-            ("MAC:", session.mac),
-            ("Status:", "Blocked"),
-        ]),
+        description=_info_box(
+            [
+                ("Device:", session.named or _device_name(session.mac)),
+                ("MAC:", session.mac),
+                ("Status:", "Blocked"),
+            ]
+        ),
         color=_COLOR_BLOCK,
     )
     embed.set_footer(text="Use /rm to unblock it later.")
@@ -115,10 +127,13 @@ def _blocked_ack_embed(session) -> discord.Embed:
 def _permanent_failure_embed(session) -> discord.Embed:
     return discord.Embed(
         title="`❌` Setup Failed — Contact Admin",
-        description=_info_box([
-            ("Device:", _device_name(session.mac)),
-            ("MAC:", session.mac),
-        ]) + "\nSetup failed after 3 attempts. Please contact an administrator.",
+        description=_info_box(
+            [
+                ("Device:", _device_name(session.mac)),
+                ("MAC:", session.mac),
+            ]
+        )
+        + "\nSetup failed after 3 attempts. Please contact an administrator.",
         color=_COLOR_BLOCK,
     )
 
@@ -126,9 +141,12 @@ def _permanent_failure_embed(session) -> discord.Embed:
 def _processing_embed(session, title: str = "Processing…") -> discord.Embed:
     return discord.Embed(
         title=f"`⏳` {title}",
-        description=_info_box([
-            ("Device:", _device_name(session.mac)),
-            ("MAC:", session.mac),
-        ]) + f"\n{title}",
+        description=_info_box(
+            [
+                ("Device:", _device_name(session.mac)),
+                ("MAC:", session.mac),
+            ]
+        )
+        + f"\n{title}",
         color=_COLOR_NEW,
     )

@@ -1,13 +1,15 @@
 import asyncio
-from logger import logger
-from state import state, ROUTER_LOCK
+
 import db
-import usage_db
-import telegram.db as telegram_db
 import telegram.client as telegram_client
+import telegram.db as telegram_db
+import usage_db
+from logger import logger
 from services.traffic import get_today_usage_by_mac
-from utils.traffic import format_data_size
+from state import ROUTER_LOCK, state
 from telegram.commands.register import command
+from utils.traffic import format_data_size
+
 
 @command("/usage")
 async def handle_usage_command(chat_id: str, first_name: str = ""):
@@ -15,8 +17,7 @@ async def handle_usage_command(chat_id: str, first_name: str = ""):
     mac = telegram_db.get_mac_by_chat_id(chat_id)
     if not mac:
         await telegram_client.send_message(
-            chat_id,
-            "<b>`❌` This Telegram chat isn't linked to any device yet.</b>\n"
+            chat_id, "<b>`❌` This Telegram chat isn't linked to any device yet.</b>\n"
         )
         return
 
@@ -28,7 +29,9 @@ async def handle_usage_command(chat_id: str, first_name: str = ""):
 
     effective_limit = db.get_effective_daily_limit(mac)
     extra_quota = usage_db.get_extra_quota(mac)
-    base_limit = max(effective_limit - extra_quota, 0)  # what the device gets before any bonus
+    base_limit = max(
+        effective_limit - extra_quota, 0
+    )  # what the device gets before any bonus
 
     device_name = state.macs_list.get(mac, mac)
     is_banned = mac in state.banned_macs
@@ -55,11 +58,15 @@ async def handle_usage_command(chat_id: str, first_name: str = ""):
 
     if extra_quota > 0:
         lines.append(f"{'Extra Added:'.ljust(13)} +{format_data_size(extra_quota)}")
-        lines.append(f"{'Left of Extra:'.ljust(13)} {format_data_size(remaining_extra)}")
+        lines.append(
+            f"{'Left of Extra:'.ljust(13)} {format_data_size(remaining_extra)}"
+        )
 
     lines.append(f"{'Remaining:'.ljust(13)} {format_data_size(remaining_total)}")
 
     text = "📊 <b>Your Usage Today</b>\n<pre>" + "\n".join(lines) + "</pre>"
 
-    logger.info(f"Telegram /usage requested by {first_name or chat_id} for {device_name} ({mac}).")
+    logger.info(
+        f"Telegram /usage requested by {first_name or chat_id} for {device_name} ({mac})."
+    )
     await telegram_client.send_message(chat_id, text)

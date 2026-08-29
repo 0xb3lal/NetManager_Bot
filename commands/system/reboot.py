@@ -4,9 +4,10 @@ import discord
 from discord import app_commands
 
 from logger import logger
-from state import ROUTER_LOCK
-from router.client import reboot_router as send_reboot_command
 from router.client import is_router_alive
+from router.client import reboot_router as send_reboot_command
+from state import ROUTER_LOCK
+
 
 async def _wait_for_router_and_notify(channel, user_mention):
     await asyncio.sleep(15)
@@ -15,9 +16,7 @@ async def _wait_for_router_and_notify(channel, user_mention):
     interval = 10
     waited = 0
 
-    logger.info(
-        "Started watching for router recovery after manual reboot."
-    )
+    logger.info("Started watching for router recovery after manual reboot.")
 
     while waited < max_wait:
         try:
@@ -25,9 +24,7 @@ async def _wait_for_router_and_notify(channel, user_mention):
                 alive = await asyncio.to_thread(is_router_alive)
 
         except Exception as e:
-            logger.error(
-                f"Error while checking router recovery: {e}"
-            )
+            logger.error(f"Error while checking router recovery: {e}")
             alive = False
 
         if alive:
@@ -43,13 +40,9 @@ async def _wait_for_router_and_notify(channel, user_mention):
             try:
                 await channel.send(embed=embed)
             except Exception as e:
-                logger.error(
-                    f"Failed to send router recovery notice: {e}"
-                )
+                logger.error(f"Failed to send router recovery notice: {e}")
 
-            logger.info(
-                "Router recovery confirmed and notified."
-            )
+            logger.info("Router recovery confirmed and notified.")
             return
 
         await asyncio.sleep(interval)
@@ -69,13 +62,10 @@ async def _wait_for_router_and_notify(channel, user_mention):
         await channel.send(embed=embed)
 
     except Exception as e:
-        logger.error(
-            f"Failed to send router recovery timeout notice: {e}"
-        )
+        logger.error(f"Failed to send router recovery timeout notice: {e}")
 
-    logger.warning(
-        "Router did not come back online within the expected window."
-    )
+    logger.warning("Router did not come back online within the expected window.")
+
 
 class RebootConfirmView(discord.ui.View):
 
@@ -89,8 +79,7 @@ class RebootConfirmView(discord.ui.View):
     ) -> bool:
         if interaction.user.id != self.requester_id:
             await interaction.response.send_message(
-                "`⚠️` Only the user who issued this command "
-                "can confirm it.",
+                "`⚠️` Only the user who issued this command " "can confirm it.",
                 ephemeral=True,
             )
             return False
@@ -117,50 +106,34 @@ class RebootConfirmView(discord.ui.View):
         try:
             await interaction.response.edit_message(
                 content=(
-                    "`🔄` Reboot confirmed. Sending the command "
-                    "to the router now..."
+                    "`🔄` Reboot confirmed. Sending the command " "to the router now..."
                 ),
                 view=self,
             )
 
         except Exception as e:
-            logger.error(
-                f"Failed to edit reboot confirmation message: {e}"
-            )
+            logger.error(f"Failed to edit reboot confirmation message: {e}")
 
-        logger.warning(
-            f"Router reboot CONFIRMED by {interaction.user}"
-        )
+        logger.warning(f"Router reboot CONFIRMED by {interaction.user}")
 
-        logger.info(
-            "Waiting 5 seconds before sending the actual "
-            "reboot command..."
-        )
+        logger.info("Waiting 5 seconds before sending the actual " "reboot command...")
 
         await asyncio.sleep(5)
 
-        logger.info(
-            "Done waiting. Sending the reboot command "
-            "to the router now."
-        )
+        logger.info("Done waiting. Sending the reboot command " "to the router now.")
 
         try:
             async with ROUTER_LOCK:
-                success = await asyncio.to_thread(
-                    send_reboot_command
-                )
+                success = await asyncio.to_thread(send_reboot_command)
 
         except Exception as e:
-            logger.exception(
-                f"Unexpected error while sending reboot command: {e}"
-            )
+            logger.exception(f"Unexpected error while sending reboot command: {e}")
             success = False
 
         try:
             if success:
                 logger.info(
-                    "Sending 'reboot command sent successfully' "
-                    "message to channel."
+                    "Sending 'reboot command sent successfully' " "message to channel."
                 )
 
                 await interaction.channel.send(
@@ -169,10 +142,7 @@ class RebootConfirmView(discord.ui.View):
                 )
 
             else:
-                logger.info(
-                    "Sending 'reboot command failed' "
-                    "message to channel."
-                )
+                logger.info("Sending 'reboot command failed' " "message to channel.")
 
                 await interaction.channel.send(
                     f"{interaction.user.mention} "
@@ -181,9 +151,7 @@ class RebootConfirmView(discord.ui.View):
                 )
 
         except Exception as e:
-            logger.error(
-                f"Failed to send reboot result message: {e}"
-            )
+            logger.error(f"Failed to send reboot result message: {e}")
 
         if success:
             try:
@@ -194,14 +162,10 @@ class RebootConfirmView(discord.ui.View):
                     )
                 )
 
-                logger.info(
-                    "Router recovery watcher scheduled."
-                )
+                logger.info("Router recovery watcher scheduled.")
 
             except Exception as e:
-                logger.exception(
-                    f"Failed to schedule router recovery watcher: {e}"
-                )
+                logger.exception(f"Failed to schedule router recovery watcher: {e}")
 
         else:
             logger.warning(
@@ -231,6 +195,7 @@ class RebootConfirmView(discord.ui.View):
 
         self.stop()
 
+
 @app_commands.checks.has_permissions(administrator=True)
 async def reboot(
     interaction: discord.Interaction,
@@ -246,14 +211,12 @@ async def reboot(
         )
 
         logger.info(
-            f"Reboot requested by {interaction.user} "
-            "(awaiting confirmation)"
+            f"Reboot requested by {interaction.user} " "(awaiting confirmation)"
         )
 
     except Exception as e:
-        logger.error(
-            f"Error showing reboot confirmation: {e}"
-        )
+        logger.error(f"Error showing reboot confirmation: {e}")
+
 
 def setup(bot):
     bot.tree.add_command(

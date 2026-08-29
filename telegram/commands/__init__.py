@@ -1,17 +1,17 @@
-from logger import logger
-
-import telegram.db as telegram_db
-from telegram.discord_bridge import notify_admin_new_telegram_user
-from telegram.commands.register import COMMAND_HANDLERS
+import telegram.commands.start
 
 # registers itself into COMMAND_HANDLERS. To add a new command later:
 # create commands/<name>.py with an @command("/name") handler, and add
 # ONE import line below. Nothing else in this file needs to change.
 import telegram.commands.usage
-import telegram.commands.start
+import telegram.db as telegram_db
+from logger import logger
+from telegram.commands.register import COMMAND_HANDLERS
+from telegram.discord_bridge import notify_admin_new_telegram_user
 
 # on every message — one notification per chat per process run is enough.
 _already_notified_unlinked = set()
+
 
 async def handle_update(update: dict):
     """Route Telegram update to command handler."""

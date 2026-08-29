@@ -1,20 +1,22 @@
 import discord
 from discord import app_commands
+
 import db
 import usage_db
 from logger import logger
-from state import state, QUOTA_LOCK
+from services.limits import (
+    add_extra_quota_covering_overage,
+    recheck_device_after_limit_change,
+)
+from state import QUOTA_LOCK, state
+from utils.autocomplete import all_macs_autocomplete
 from utils.discord import safe_defer
 from utils.traffic import format_data_size
 from utils.validators import is_valid_mac
-from utils.autocomplete import all_macs_autocomplete
-from services.limits import (
-    recheck_device_after_limit_change,
-    add_extra_quota_covering_overage,
-)
 
 SUSPICIOUS_LOW_GB = 0.1
 SUSPICIOUS_HIGH_GB = 1.0
+
 
 class QuotaConfirmView(discord.ui.View):
     """Confirmation prompt shown when a quota value looks like a unit mistake."""
@@ -33,7 +35,9 @@ class QuotaConfirmView(discord.ui.View):
         return True
 
     @discord.ui.button(label="Confirm", style=discord.ButtonStyle.danger)
-    async def confirm(self, interaction: discord.Interaction, button: discord.ui.Button):
+    async def confirm(
+        self, interaction: discord.Interaction, button: discord.ui.Button
+    ):
         self.confirmed = True
         self.stop()
         await interaction.response.defer()
@@ -44,34 +48,39 @@ class QuotaConfirmView(discord.ui.View):
         self.stop()
         await interaction.response.defer()
 
+
 def setup(bot):
 
     @bot.tree.command(
         name="quota",
-        description="Add to or edit a device's extra daily quota (today only)"
+        description="Add to or edit a device's extra daily quota (today only)",
     )
     @app_commands.checks.has_permissions(administrator=True)
     @app_commands.describe(
         mac="The device to change quota for",
         action="Add extra usable data on top of current usage, or edit the extra quota to an absolute value",
         value="Amount of extra data",
-        unit="Unit for the value (defaults to GB)"
+        unit="Unit for the value (defaults to GB)",
     )
-    @app_commands.choices(action=[
-        app_commands.Choice(name="Add", value="add"),
-        app_commands.Choice(name="Edit", value="edit"),
-    ])
-    @app_commands.choices(unit=[
-        app_commands.Choice(name="GB", value="GB"),
-        app_commands.Choice(name="MB", value="MB"),
-    ])
+    @app_commands.choices(
+        action=[
+            app_commands.Choice(name="Add", value="add"),
+            app_commands.Choice(name="Edit", value="edit"),
+        ]
+    )
+    @app_commands.choices(
+        unit=[
+            app_commands.Choice(name="GB", value="GB"),
+            app_commands.Choice(name="MB", value="MB"),
+        ]
+    )
     @app_commands.autocomplete(mac=all_macs_autocomplete)
     async def quota(
         interaction: discord.Interaction,
         mac: str,
         action: app_commands.Choice[str],
         value: float,
-        unit: app_commands.Choice[str]
+        unit: app_commands.Choice[str],
     ):
         if not await safe_defer(interaction, thinking=True):
             return
@@ -90,7 +99,9 @@ def setup(bot):
                 await interaction.followup.send("`❌` Value must be greater than zero.")
                 return
 
-            is_suspicious = value_gb < SUSPICIOUS_LOW_GB or value_gb > SUSPICIOUS_HIGH_GB
+            is_suspicious = (
+                value_gb < SUSPICIOUS_LOW_GB or value_gb > SUSPICIOUS_HIGH_GB
+            )
 
             if is_suspicious:
                 view = QuotaConfirmView(interaction.user.id)
@@ -106,9 +117,9 @@ def setup(bot):
                             "\nThis looks unusually small or large — did you mean to pick a different unit?\n"
                             "Press **Confirm** to proceed anyway, or **Cancel** to abort."
                         ),
-                        color=0xffa500
+                        color=0xFFA500,
                     ),
-                    view=view
+                    view=view,
                 )
 
                 await view.wait()
@@ -117,15 +128,13 @@ def setup(bot):
                     await warning_msg.edit(
                         content="`⌛` Confirmation timed out — quota change cancelled.",
                         embed=None,
-                        view=None
+                        view=None,
                     )
                     return
 
                 if not view.confirmed:
                     await warning_msg.edit(
-                        content="`❌` Quota change cancelled.",
-                        embed=None,
-                        view=None
+                        content="`❌` Quota change cancelled.", embed=None, view=None
                     )
                     return
 
@@ -136,7 +145,9 @@ def setup(bot):
                     new_extra_total = usage_db.set_extra_quota(mac_upper, value_gb)
 
                 if new_extra_total is None:
-                    await interaction.followup.send("`❌` Failed to update extra quota.")
+                    await interaction.followup.send(
+                        "`❌` Failed to update extra quota."
+                    )
                     return
 
                 new_effective_limit = db.get_effective_daily_limit(mac_upper)
@@ -151,7 +162,9 @@ def setup(bot):
                     bot, mac_upper, value_gb
                 )
                 if result is None:
-                    await interaction.followup.send("`❌` Failed to update extra quota.")
+                    await interaction.followup.send(
+                        "`❌` Failed to update extra quota."
+                    )
                     return
 
                 new_extra_total, new_effective_limit, usage_gb = result
@@ -179,7 +192,7 @@ def setup(bot):
                         f"```"
                         "\n`✅` Applies for today only — resets automatically at midnight."
                     ),
-                    color=0xf1c40f
+                    color=0xF1C40F,
                 )
             )
 

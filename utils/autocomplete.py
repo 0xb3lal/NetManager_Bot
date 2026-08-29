@@ -1,8 +1,9 @@
 import discord
 from discord import app_commands
 
-from state import state
 from logger import logger
+from state import state
+
 
 async def mac_autocomplete(interaction: discord.Interaction, current: str):
     try:
@@ -22,6 +23,7 @@ async def mac_autocomplete(interaction: discord.Interaction, current: str):
         logger.error(f"Error in mac_autocomplete: {e}")
         return []
 
+
 async def banned_macs_autocomplete(interaction: discord.Interaction, current: str):
     try:
         macs_list_snapshot = dict(state.macs_list)
@@ -29,15 +31,19 @@ async def banned_macs_autocomplete(interaction: discord.Interaction, current: st
         current_lower = current.lower()
 
         choices = [
-            app_commands.Choice(name=macs_list_snapshot.get(mac, "Unknown Device"), value=mac)
+            app_commands.Choice(
+                name=macs_list_snapshot.get(mac, "Unknown Device"), value=mac
+            )
             for mac in banned_macs_snapshot
-            if current_lower in mac.lower() or current_lower in macs_list_snapshot.get(mac, "").lower()
+            if current_lower in mac.lower()
+            or current_lower in macs_list_snapshot.get(mac, "").lower()
         ]
         return choices[:25]
 
     except Exception as e:
         logger.error(f"Error in banned_macs_autocomplete: {e}")
         return []
+
 
 async def all_macs_autocomplete(interaction: discord.Interaction, current: str):
     try:
@@ -55,11 +61,12 @@ async def all_macs_autocomplete(interaction: discord.Interaction, current: str):
         logger.error(f"Error in all_macs_autocomplete: {e}")
         return []
 
+
 async def wl_macs_autocomplete(interaction: discord.Interaction, current: str):
     try:
         action_value = getattr(interaction.namespace, "action", None)
 
-        macs_list_snapshot    = dict(state.macs_list)
+        macs_list_snapshot = dict(state.macs_list)
         allowed_macs_snapshot = list(state.allowed_macs)
 
         if action_value == "remove":

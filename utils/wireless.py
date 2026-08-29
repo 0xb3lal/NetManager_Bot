@@ -19,7 +19,9 @@ def rssi_to_distance_m(rssi: int, rssi_at_1m: int, n: float) -> float | None:
         return None
 
 
-def clamp_distance(distance: float | None, floor_m: float = 1.0) -> tuple[float | None, bool]:
+def clamp_distance(
+    distance: float | None, floor_m: float = 1.0
+) -> tuple[float | None, bool]:
     """Clamp distance to floor; returns (clamped, was_clamped)."""
     if distance is None:
         return None, False

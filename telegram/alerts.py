@@ -1,20 +1,22 @@
+import telegram.client as telegram_client
+import telegram.db as telegram_db
 from logger import logger
 from state import state
 from utils.traffic import format_data_size
 
-import telegram.db as telegram_db
-import telegram.client as telegram_client
-
 USAGE_NOTIFY_THRESHOLDS = (25, 50, 75, 100)
 
 _THRESHOLD_STYLE = {
-    25:  ("🔵", "Usage Update"),
-    50:  ("📶", "Usage Alert"),
-    75:  ("⚠️", "Usage Alert"),
+    25: ("🔵", "Usage Update"),
+    50: ("📶", "Usage Alert"),
+    75: ("⚠️", "Usage Alert"),
     100: ("🚫", "Limit Reached"),
 }
 
-async def check_and_send_threshold_alerts(mac: str, device_name: str, usage_gb: float, effective_limit: float):
+
+async def check_and_send_threshold_alerts(
+    mac: str, device_name: str, usage_gb: float, effective_limit: float
+):
     """Alert on Telegram at 25/50/75/100%; mark notified only after confirmed send."""
     chat_id = telegram_db.get_device_chat_id(mac)
     if not chat_id:
@@ -39,7 +41,10 @@ async def check_and_send_threshold_alerts(mac: str, device_name: str, usage_gb: 
                 f"will retry on next check."
             )
 
-def _build_alert_text(mac: str, device_name: str, usage_gb: float, effective_limit: float, threshold: int) -> str:
+
+def _build_alert_text(
+    mac: str, device_name: str, usage_gb: float, effective_limit: float, threshold: int
+) -> str:
     """Build usage alert text for Telegram."""
     remaining_gb = max(effective_limit - usage_gb, 0)
     icon, header = _THRESHOLD_STYLE.get(threshold, ("📶", "Usage Alert"))

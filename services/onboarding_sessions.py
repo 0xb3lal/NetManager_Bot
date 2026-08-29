@@ -21,18 +21,26 @@ def _device_name(mac: str) -> str:
 
 
 class OnboardingSession:
-    def __init__(self, mac: str, hostname: str, ip: str = None, rssi_dbm: int | None = None, distance_m: float | None = None, quality_pct: int | None = None):
+    def __init__(
+        self,
+        mac: str,
+        hostname: str,
+        ip: str = None,
+        rssi_dbm: int | None = None,
+        distance_m: float | None = None,
+        quality_pct: int | None = None,
+    ):
         self.mac = mac
         self.hostname = hostname
         self.ip = ip
         self.rssi_dbm = rssi_dbm
         self.distance_m = distance_m
         self.quality_pct = quality_pct
-        self.step = "q1"          # q1 -> q2/q3 -> done
-        self.context = None       # "allowed" | "blocked" once Q1 answered
+        self.step = "q1"  # q1 -> q2/q3 -> done
+        self.context = None  # "allowed" | "blocked" once Q1 answered
         self.whitelisted = False
-        self.named = None         # custom name if one was assigned
-        self.message = None       # the Discord message carrying the current question
+        self.named = None  # custom name if one was assigned
+        self.message = None  # the Discord message carrying the current question
         self.busy: bool = False
         self.retry_count: int = 0
         self.max_retries: int = 3
@@ -64,5 +72,7 @@ async def _gone_notice(session: OnboardingSession):
             view=None,
         )
     except Exception as e:
-        logger.warning(f"Could not update deleted-device message for {session.mac}: {e}")
+        logger.warning(
+            f"Could not update deleted-device message for {session.mac}: {e}"
+        )
     drop_session(session.mac)
