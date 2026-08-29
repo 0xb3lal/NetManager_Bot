@@ -388,6 +388,25 @@ async def _handle_remove(interaction: discord.Interaction, mac: str):
     was_pending = target in state.pending_macs
     was_in_macs = target in state.macs_list
 
+    # Live connectivity check BEFORE any purge: fetch_devlist also refreshes
+    # last-seen and ip_to_mac_cache, so it must run before the cleanup below.
+    # Signal matches discovery (DHCP lease presence) — if discovery would see
+    # this device, it is connected and must be re-pended now.
+    is_connected = False
+    try:
+        from router.devices import fetch_devlist
+
+        async with ROUTER_LOCK:
+            dhcp_leases, _, _ = await asyncio.to_thread(fetch_devlist)
+        is_connected = any(
+            (lease[2] or "").upper() == target for lease in dhcp_leases
+        )
+    except Exception as e:
+        # Fail closed: if the router cannot be reached, assume connected so
+        # the device gets a DROP rule instead of open access.
+        logger.warning(f"Connectivity check failed for remove {target}: {e}")
+        is_connected = True
+
     try:
         from services.onboarding import _sessions, drop_session
 
@@ -416,6 +435,13 @@ async def _handle_remove(interaction: discord.Interaction, mac: str):
     except Exception:
         pass
 
+    # Bug B: a still-connected device must not ride the final ACCEPT rule for
+    # the ~10 min rediscovery TTL window. Re-pend it immediately so the
+    # rebuild below emits a DROP; the TTL guard still blocks DB row /
+    # onboarding recreation until the window expires.
+    if is_connected:
+        state.pending_macs.add(target)
+
     try:
         from router.static_leases import (
             _push_dhcpd_static,
@@ -443,7 +469,7 @@ async def _handle_remove(interaction: discord.Interaction, mac: str):
     except Exception as e:
         logger.warning(f"Static DHCP cleanup failed for remove {target}: {e}")
 
-    if was_banned or was_allowed or was_pending:
+    if was_banned or was_allowed or was_pending or is_connected:
         try:
             from router.firewall import enable_lockdown
 
@@ -467,7 +493,7 @@ async def _handle_remove(interaction: discord.Interaction, mac: str):
     await interaction.followup.send(
         embed=discord.Embed(
             title="`🗑️` Device Removed",
-            description=f"**MAC:** `{target}`\n\nAll DB, state, and router static entries cleaned. It will no longer appear in /macs or autocomplete until rediscovered (if still connected, it will reappear as pending).",
+            description=f"**MAC:** `{target}`\n\nAll DB, state, and router static entries cleaned. It will no longer appear in /macs or autocomplete until rediscovered. If still connected, it was re-pended immediately (firewall DROP active) and will re-enter onboarding after the ~10 min rediscovery cooldown.",
             color=0xE74C3C,
         )
     )
