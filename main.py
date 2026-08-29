@@ -80,12 +80,24 @@ class MyBot(discord.Client):
         if not stale_cleanup_task.is_running():
             stale_cleanup_task.start()
 
+        # Keep handles to everything this attempt started so a failed-attempt
+        # retry (main loop) can cancel them instead of leaking duplicates.
+        self._bg_loops = [
+            traffic_check_task,
+            device_discovery_task,
+            daily_network_report,
+            daily_usage_monitor_task,
+            midnight_reset_task,
+            anomaly_check_task,
+            stale_cleanup_task,
+        ]
+
         # setup_hook (runs once per process before on_ready) is the right
         # place — no need to wait for guild/cache readiness like
         # on_ready-dependent logic.
         discord_bridge.set_bot_instance(self)
         await initialize_telegram_bot()
-        start_telegram_polling()
+        self._telegram_task = start_telegram_polling()
 
     async def on_disconnect(self):
         logger.warning(
@@ -110,6 +122,23 @@ class MyBot(discord.Client):
 
         async with ROUTER_LOCK:
             await asyncio.to_thread(reapply_firewall_state)
+
+
+def _cancel_attempt_tasks(bot):
+    """Cancel all background loops/pollers a failed attempt started."""
+    for loop in getattr(bot, "_bg_loops", None) or []:
+        try:
+            if loop.is_running():
+                loop.cancel()
+        except Exception as cancel_err:
+            logger.warning(f"Failed to cancel background loop {loop!r}: {cancel_err}")
+    poller = getattr(bot, "_telegram_task", None)
+    if poller is not None:
+        try:
+            if not poller.done():
+                poller.cancel()
+        except Exception as cancel_err:
+            logger.warning(f"Failed to cancel Telegram polling task: {cancel_err}")
 
 
 async def main():
@@ -145,6 +174,7 @@ async def main():
                 f"Fatal error in main loop (attempt #{attempt}): {e}. "
                 f"Retrying in {retry_delay}s..."
             )
+            _cancel_attempt_tasks(bot)
             await asyncio.sleep(retry_delay)
             retry_delay = min(retry_delay * 2, max_retry_delay)
             continue

@@ -6,6 +6,7 @@ from logger import logger
 
 _POLL_TIMEOUT = 30  # seconds — Telegram long-polling wait time per request
 _ERROR_BACKOFF = 5  # seconds — pause before retrying after a failure
+_polling_task = None
 
 
 async def telegram_polling_loop():
@@ -34,8 +35,12 @@ async def telegram_polling_loop():
 
 
 def start_telegram_polling():
-    """Start Telegram polling task."""
-    return asyncio.create_task(telegram_polling_loop())
+    """Start the Telegram polling task (idempotent: one live poller max)."""
+    global _polling_task
+    if _polling_task is not None and not _polling_task.done():
+        return _polling_task
+    _polling_task = asyncio.create_task(telegram_polling_loop())
+    return _polling_task
 
 
 async def initialize_telegram_bot():
