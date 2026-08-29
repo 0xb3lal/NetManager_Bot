@@ -6,7 +6,7 @@ from discord import app_commands
 
 import db
 from logger import logger
-from router.firewall import enable_lockdown
+from router.firewall import enable_lockdown, unban_mac
 from state import ROUTER_LOCK, state
 from utils.autocomplete import wl_macs_autocomplete
 from utils.discord import safe_defer
@@ -77,10 +77,13 @@ async def wl(
             # pending device is marked confirmed and removed from the pending set.
             db.set_onboarding_confirmed(mac)
             state.pending_macs.discard(mac)
-            await asyncio.to_thread(
-                enable_lockdown,
-                force_lock=state.lockdown_state,
-            )
+            if mac in state.banned_macs:
+                await asyncio.to_thread(unban_mac, mac)
+            else:
+                await asyncio.to_thread(
+                    enable_lockdown,
+                    force_lock=state.lockdown_state,
+                )
 
         logger.info(f"Whitelist command: added {hostname} ({mac}) to whitelist.")
         await interaction.followup.send(f"`✅` Device `{hostname}` added to whitelist.")
