@@ -409,9 +409,12 @@ class OnboardingQ2View(_OnboardingBaseView):
 
             async def _router_work():
                 async with ROUTER_LOCK:
-                    await asyncio.to_thread(
-                        enable_lockdown, force_lock=state.lockdown_state
-                    )
+                    if session.mac in state.banned_macs:
+                        await asyncio.to_thread(unban_mac, session.mac)
+                    else:
+                        await asyncio.to_thread(
+                            enable_lockdown, force_lock=state.lockdown_state
+                        )
 
             async def _on_success():
                 session.whitelisted = True

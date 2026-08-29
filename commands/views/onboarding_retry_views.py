@@ -116,9 +116,12 @@ class FirewallRetryView(discord.ui.View):
                     elif self.op == "q1_block":
                         await asyncio.to_thread(ban_mac, session.mac, "onboarding")
                     elif self.op == "q2_whitelist":
-                        await asyncio.to_thread(
-                            enable_lockdown, force_lock=state.lockdown_state
-                        )
+                        if session.mac in state.banned_macs:
+                            await asyncio.to_thread(unban_mac, session.mac)
+                        else:
+                            await asyncio.to_thread(
+                                enable_lockdown, force_lock=state.lockdown_state
+                            )
                     else:
                         logger.error(
                             f"Unknown FirewallRetry op {self.op} for {session.mac}"
