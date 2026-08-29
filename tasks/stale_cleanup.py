@@ -76,7 +76,7 @@ async def _send_stale_success(channel, removed):
     try:
         if not removed:
             logger.info("Stale device cleanup completed: nothing to remove.")
-            # Optional: still notify? Existing behavior logs only, no embed when nothing. Keep same.
+            # Deliberately no embed for an empty cleanup — log-only, matching the established behavior.
             return True
         if not channel:
             logger.info(
@@ -98,10 +98,9 @@ async def _send_stale_success(channel, removed):
                 f"are removed automatically."
             )
         )
-        # Bounded retry for Discord send (3 attempts)
         for attempt in range(3):
             try:
-                await channel.send(embed=embed)
+                await channel.send(embed)
                 logger.info(
                     f"Stale device cleanup completed: {len(removed)} device(s) removed."
                 )
@@ -167,12 +166,10 @@ async def _retry_stale_cleanup(channel, first_error):
             try:
                 removed = await _run_stale_cleanup_once()
                 if removed is None:
-                    # Lock busy is not failure, treat as success with no removal?
                     logger.info(
                         "Stale cleanup retry skipped (lock busy), treating as success"
                     )
                     return
-                # Success
                 await _send_stale_success(channel, removed)
                 logger.info(f"Stale cleanup succeeded on retry attempt {attempt}")
                 return
@@ -180,7 +177,6 @@ async def _retry_stale_cleanup(channel, first_error):
                 last_error = e
                 logger.error(f"Stale cleanup retry attempt {attempt} failed: {e}")
                 continue
-        # All retries exhausted
         logger.error(
             f"Stale cleanup failed after {STALE_MAX_ATTEMPTS} attempts over ~90 minutes: {last_error}"
         )
@@ -200,7 +196,6 @@ def setup_stale_cleanup_task(bot):
             removed = await _run_stale_cleanup_once()
             if removed is None:
                 return
-            # Success on first attempt
             await _send_stale_success(channel, removed)
         except Exception as e:
             logger.error(f"Stale cleanup attempt 1 failed: {e}")

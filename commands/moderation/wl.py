@@ -74,6 +74,7 @@ async def wl(
             db.set_device_allowed(mac, True)
             state.allowed_macs.append(mac)
             # Whitelisting resolves onboarding explicitly; a whitelisted-but-still-
+            # pending device is marked confirmed and removed from the pending set.
             db.set_onboarding_confirmed(mac)
             state.pending_macs.discard(mac)
             await asyncio.to_thread(

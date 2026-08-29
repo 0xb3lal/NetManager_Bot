@@ -1,14 +1,3 @@
-"""
-commands/views/onboarding_modals.py
-
-Extracted from services/onboarding.py:1125-1351 (Phase B).
-
-Discord Modal for renaming during onboarding — RenameModal.
-Keeps the full on_submit flow including IP resolution, static lease
-update, discovery resync, and ack embeds. All cross-layer helpers are
-imported locally or via leaf-safe top-level leaves.
-"""
-
 import asyncio
 
 import discord
@@ -61,7 +50,6 @@ class RenameModal(discord.ui.Modal):
         except Exception as e:
             logger.warning(f"Unexpected defer error for {session.mac}: {e}")
 
-        # Placeholder after defer
         placeholder = _processing_embed(session, "Processing rename…")
         try:
             await interaction.followup.edit_message(

@@ -1,14 +1,3 @@
-"""Tests for per-device daily limit persistence: persistent vs today_only.
-
-Run: venv/Scripts/python.exe test_daily_limit_persistence.py
-Covers:
-- today_only works same day
-- today_only falls back next day (lazy, even without cleanup)
-- persistent remains active
-- existing rows without mode behave as persistent
-- switching persistent -> today_only and vice versa
-- explicit reset still works
-"""
 import pathlib
 import tempfile
 from unittest.mock import patch

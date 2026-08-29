@@ -1,18 +1,3 @@
-"""
-commands/views/onboarding_views.py
-
-Extracted from services/onboarding.py:216-246 + 676-1122 (Phase B).
-
-Discord Views for the main onboarding questionnaire (Q1-Q3).
-All embed creation via commands/views/onboarding_embeds, all retry
-orchestration via services/onboarding_retry. Interaction gates via
-utils/discord.ensure_admin (not services._admin_gate).
-
-Top-level imports are leaf-safe (services/onboarding_sessions, state,
-router.firewall, utils.discord). Any embed/view continuation that would
-close a cycle is already isolated in onboarding_retry / onboarding_retry_views.
-"""
-
 import asyncio
 
 import discord

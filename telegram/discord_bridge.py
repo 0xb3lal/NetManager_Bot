@@ -1,14 +1,3 @@
-"""
-telegram/discord_bridge.py
-
-Telegram command handlers run outside the Discord command tree, but
-sometimes need to notify the admin on Discord (e.g. a new, unlinked
-Telegram user messaging the bot). This module holds a reference to the
-Discord bot instance, set once at startup, so any Telegram-side code
-can reach the Discord channel without needing the bot passed through
-every function call.
-"""
-
 import discord
 
 from config import CHANNEL_ID

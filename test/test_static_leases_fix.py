@@ -1,7 +1,3 @@
-"""Focused regression tests for Tomato shell.cgi + static lease MAC fix.
-
-Tests A-F per task spec. Run with: venv/Scripts/python.exe test_static_leases_fix.py
-"""
 import pathlib
 import sys
 

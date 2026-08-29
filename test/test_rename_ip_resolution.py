@@ -1,8 +1,3 @@
-"""Focused regression tests for /rename IP resolution priority.
-
-Priority: explicit IP > active DHCP > static DHCP > ask user
-Run: venv/Scripts/python.exe test_rename_ip_resolution.py
-"""
 import asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
 

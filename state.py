@@ -1,20 +1,3 @@
-"""
-Shared mutable bot state, in one place.
-
-Every file that needs to read or write shared data (banned MACs, allowed MACs, threshold, etc.)
-
-does: from state import state, ROUTER_LOCK
-
-and then reads/writes attributes on `state` directly, e.g.:
-
-    state.banned_macs.add(mac)
-    state.threshold = 5.0
-
-Never do `state = something_else` (that only rebinds the name inside your
-own file). Always mutate attributes on the existing `state` object, so the
-change is visible from every other file that imported the same instance.
-"""
-
 import asyncio
 
 import db
@@ -45,8 +28,8 @@ class BotState:
 
 state = BotState()
 
-# bot_core) so command files can import it without importing the bot
-# itself.
+# Shared lock serializing all router HTTP calls — lives here (not in the bot's
+# main module) so command files can import it without importing the bot itself.
 ROUTER_LOCK = asyncio.Lock()
 
 # quota (usage_db.extra_quota table). Without this, two near-simultaneous

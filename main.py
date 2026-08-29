@@ -80,8 +80,9 @@ class MyBot(discord.Client):
         if not stale_cleanup_task.is_running():
             stale_cleanup_task.start()
 
-        # per process before on_ready) is the right place — no need to
-        # wait for guild/cache readiness like on_ready-dependent logic.
+        # setup_hook (runs once per process before on_ready) is the right
+        # place — no need to wait for guild/cache readiness like
+        # on_ready-dependent logic.
         discord_bridge.set_bot_instance(self)
         await initialize_telegram_bot()
         start_telegram_polling()

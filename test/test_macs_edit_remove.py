@@ -1,8 +1,3 @@
-"""Regression tests for /macs edit/remove.
-
-Covers A-R per plan.
-Run: venv/Scripts/python.exe test_macs_edit_remove.py
-"""
 import asyncio
 import pathlib
 import sqlite3

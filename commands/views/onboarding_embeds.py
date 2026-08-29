@@ -1,15 +1,3 @@
-"""
-commands/views/onboarding_embeds.py
-
-Extracted from services/onboarding.py:101-213 (Phase A).
-
-Pure Discord embed builders for the onboarding flow — no router I/O,
-no DB writes, no View. Mirrors the project's convention that
-discord.Embed lives only in commands/* / commands/views/* / tasks/*
-(e.g. commands/views/bulk_block.py:63, commands/system/reboot.py:80,
-tasks/anomaly_check.py:120). Colors and _info_box are owned here.
-"""
-
 import discord
 
 from services.onboarding_sessions import _device_name

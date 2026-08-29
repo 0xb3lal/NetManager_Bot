@@ -1,18 +1,3 @@
-"""
-services/onboarding_retry.py
-
-Extracted from services/onboarding.py:572-673 (Phase B).
-
-Pure orchestration helpers for retry — no discord.Embed / discord.ui.View
-at top-level. All View/Embed creation is deferred to local imports inside
-helpers to break the two cycles:
-  services/onboarding_retry ↔ commands/views/onboarding_retry_views
-  services/onboarding_retry ↔ commands/views/onboarding_embeds
-as specified in §3 (local imports break cycle).
-"""
-
-import asyncio  # kept for symmetry with original, not strictly needed here
-
 from logger import logger
 from services.onboarding_sessions import drop_session
 

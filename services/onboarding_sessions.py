@@ -1,14 +1,3 @@
-"""
-services/onboarding_sessions.py
-
-Extracted from services/onboarding.py:30-86 (Phase A).
-
-Pure session/state tracking for the onboarding flow — no discord.Embed /
-discord.ui.View. Keeps the in-memory registry keyed by MAC, the
-OnboardingSession dataclass, and helpers to drop/check liveness.
-Embeds and Views live in commands/views/onboarding_*.
-"""
-
 import db
 from logger import logger
 from state import state

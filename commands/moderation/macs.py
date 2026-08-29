@@ -300,7 +300,6 @@ async def _handle_edit(interaction: discord.Interaction, mac: str, new_mac: str)
             db.migrate_device_mac(new, old)
         except Exception as re:
             logger.error(f"Rollback DB failed {new}->{old}: {re}")
-        # Rollback state
         state.macs_list.pop(new, None)
         state.macs_list[old] = old_hostname
         if was_allowed:

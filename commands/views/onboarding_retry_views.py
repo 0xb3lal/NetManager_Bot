@@ -1,17 +1,3 @@
-"""
-commands/views/onboarding_retry_views.py
-
-Extracted from services/onboarding.py:248-569 (Phase B).
-
-Discord retry Views for onboarding — FirewallRetryView + RenameRetryView.
-These contain the only router-touching retry buttons.
-
-Top-level imports are leaf-only (discord, logger, state, router.firewall,
-services/onboarding_sessions, utils.discord). All embed/view continuations
-and helper calls that would close the cycle are deferred to local imports
-inside button callbacks (see §3 cycle break).
-"""
-
 import asyncio
 
 import discord
@@ -335,7 +321,6 @@ class RenameRetryView(discord.ui.View):
                     session, interaction, self.ip, self.new_name, err
                 )
                 return
-            # success
             try:
                 from router.devices import fetch_devlist
 

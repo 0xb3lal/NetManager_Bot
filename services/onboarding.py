@@ -1,22 +1,3 @@
-"""
-services/onboarding.py
-
-Compatibility shim — real implementation lives in:
-  services/onboarding_sessions.py  (session/state)
-  services/onboarding_retry.py     (retry helpers)
-  commands/views/onboarding_embeds.py    (embeds)
-  commands/views/onboarding_views.py     (Q1-Q3 Views)
-  commands/views/onboarding_retry_views.py (retry Views)
-  commands/views/onboarding_modals.py    (RenameModal)
-  utils/discord.py                 (_admin_gate → ensure_admin)
-
-Re-exports keep `from services.onboarding import RenameModal` (commands/system/rename.py:12)
-and `from services.onboarding import start_onboarding` (router/devices.py:9) working,
-plus test imports of _sessions / OnboardingSession. No dead __getattr__ branch for
-start_onboarding — it is defined at module level with local View/Embed imports
-to break cycles per §3.
-"""
-
 import importlib
 
 from logger import logger
