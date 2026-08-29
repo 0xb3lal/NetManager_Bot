@@ -237,6 +237,13 @@ async def _handle_edit(interaction: discord.Interaction, mac: str, new_mac: str)
 
                 _sessions.clear()
                 _sessions.update(sessions_snapshot)
+                # Restoring the dict re-keys the session under `old`, but the
+                # forward path mutated the object itself (sess.mac = new).
+                # drop_session / on_timeout / _device_gone all key off
+                # session.mac — restore it so the object matches its key.
+                restored = _sessions.get(old)
+                if restored is not None and restored.mac == new:
+                    restored.mac = old
             except Exception:
                 pass
         await interaction.followup.send(
@@ -324,6 +331,13 @@ async def _handle_edit(interaction: discord.Interaction, mac: str, new_mac: str)
 
                 _sessions.clear()
                 _sessions.update(sessions_snapshot)
+                # Restoring the dict re-keys the session under `old`, but the
+                # forward path mutated the object itself (sess.mac = new).
+                # drop_session / on_timeout / _device_gone all key off
+                # session.mac — restore it so the object matches its key.
+                restored = _sessions.get(old)
+                if restored is not None and restored.mac == new:
+                    restored.mac = old
             except Exception:
                 pass
         await interaction.followup.send(
