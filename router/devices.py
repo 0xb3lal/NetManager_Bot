@@ -4,6 +4,7 @@ import time
 
 import db
 from logger import logger
+from router.firewall import enable_lockdown
 from services.onboarding import start_onboarding
 from state import state
 
@@ -134,17 +135,34 @@ def fetch_devlist_and_discover(bot_instance):
                 # New device with Unknown — insert as Unknown (preserves pending flow)
                 if db.add_device(mac, hostname):
                     new_devices.append((mac, hostname, ip, rssi, distance, quality))
+                    # Same fail-open guard as the else branch: add_device is
+                    # DB-only; mark pending in memory so the rebuild below
+                    # emits a DROP rule for this MAC. Reachable when macs_list
+                    # holds a MAC whose DB row is gone (e.g. failed macs.py
+                    # rollback, out-of-band DB deletion).
+                    state.pending_macs.add(mac)
             # Do not update state.macs_list with Unknown
         else:
             if db.add_device(mac, hostname):
                 new_devices.append((mac, hostname, ip, rssi, distance, quality))
+                # add_device is DB-only: it writes the 'pending' row but does
+                # not touch in-memory state. Without this, the MAC never gets
+                # a DROP rule (firewall builds rules from state.pending_macs).
+                state.pending_macs.add(mac)
             if state.macs_list.get(mac) != hostname:
                 state.macs_list[mac] = hostname
+    if new_devices:
+        # Caller (tasks/device_discovery.py) holds ROUTER_LOCK while running
+        # this sync function — rebuild directly so the newly-pending MACs get
+        # DROP rules applied BEFORE the onboarding UI is posted.
+        enable_lockdown(force_lock=state.lockdown_state)
+
     if new_devices and bot_instance.loop.is_running():
 
         async def _onboard_new_devices():
-            # New devices are inserted as PENDING (firewall-dropped) by
-            # add_device; this kicks off the interactive review session.
+            # add_device is DB-only ('pending' row); the in-memory pending set
+            # and the firewall DROP rules were applied above via
+            # enable_lockdown. This just starts the interactive review session.
             for mac, hostname, ip, rssi, distance, quality in new_devices:
                 await start_onboarding(
                     bot_instance, mac, hostname, ip, rssi, distance, quality
