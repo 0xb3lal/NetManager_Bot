@@ -10,7 +10,7 @@ from config import (
     UNKNOWN_HOSTNAME_TRAFFIC_THRESHOLD_MB,
 )
 from logger import logger
-from router.firewall import ban_mac, unban_mac
+from router.firewall import ban_mac, enable_lockdown, unban_mac
 from services.traffic import get_today_usage_by_mac
 from state import ROUTER_LOCK, acquire_router_lock_bounded, state
 from utils.traffic import format_data_size
