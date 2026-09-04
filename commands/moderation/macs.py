@@ -170,8 +170,30 @@ async def _handle_edit(interaction: discord.Interaction, mac: str, new_mac: str)
     except Exception:
         pass
 
+    # Arm the rediscovery TTL guard BEFORE the DB mutation and router push:
+    # a discovery cycle running inside the multi-second window must see the
+    # guard and not resurrect the old MAC as a brand-new pending device.
+    try:
+        import time
+
+        from router.devices import _recently_migrated, _recently_removed
+
+        _recently_migrated[old] = time.time() + 600  # 10 min TTL
+        _recently_removed.pop(old, None)
+        _recently_removed.pop(new, None)
+    except Exception:
+        pass
+
     db_success = db.migrate_device_mac(old, new)
     if not db_success:
+        # DB never changed — don't leave a stale guard suppressing
+        # legitimate rediscovery of the untouched device.
+        try:
+            from router.devices import _recently_migrated
+
+            _recently_migrated.pop(old, None)
+        except Exception:
+            pass
         await interaction.followup.send(
             f"`❌` Database migration failed for `{old}` -> `{new}` (conflict or DB error). No changes made."
         )
@@ -213,6 +235,12 @@ async def _handle_edit(interaction: discord.Interaction, mac: str, new_mac: str)
             db.migrate_device_mac(new, old)
         except Exception as re:
             logger.error(f"Rollback DB failed {new}->{old}: {re}")
+        try:
+            from router.devices import _recently_migrated
+
+            _recently_migrated.pop(old, None)
+        except Exception:
+            pass
         state.macs_list.pop(new, None)
         if old_hostname:
             state.macs_list[old] = old_hostname
@@ -307,6 +335,12 @@ async def _handle_edit(interaction: discord.Interaction, mac: str, new_mac: str)
             db.migrate_device_mac(new, old)
         except Exception as re:
             logger.error(f"Rollback DB failed {new}->{old}: {re}")
+        try:
+            from router.devices import _recently_migrated
+
+            _recently_migrated.pop(old, None)
+        except Exception:
+            pass
         state.macs_list.pop(new, None)
         state.macs_list[old] = old_hostname
         if was_allowed:
@@ -359,11 +393,11 @@ async def _handle_edit(interaction: discord.Interaction, mac: str, new_mac: str)
     try:
         import time
 
-        from router.devices import _recently_migrated, _recently_removed
+        from router.devices import _recently_migrated
 
+        # Guard was armed before the mutation; refresh TTL so a long router
+        # round-trip doesn't eat into the 10-minute window.
         _recently_migrated[old] = time.time() + 600  # 10 min TTL
-        _recently_removed.pop(old, None)
-        _recently_removed.pop(new, None)
     except Exception:
         pass
 
@@ -426,6 +460,18 @@ async def _handle_remove(interaction: discord.Interaction, mac: str):
 
         if target in _sessions:
             drop_session(target)
+    except Exception:
+        pass
+
+    # Arm the rediscovery TTL guard BEFORE the DB deletion and router push:
+    # a discovery cycle running inside the multi-second window must see the
+    # guard and not resurrect the removed MAC as a brand-new pending device.
+    try:
+        import time
+
+        from router.devices import _recently_removed
+
+        _recently_removed[target] = time.time() + 600  # 10 min TTL
     except Exception:
         pass
 
@@ -499,8 +545,14 @@ async def _handle_remove(interaction: discord.Interaction, mac: str):
 
         from router.devices import _recently_migrated, _recently_removed
 
+        # Guard was armed before the deletion; refresh TTL so a long router
+        # round-trip doesn't eat into the 10-minute window.
         _recently_removed[target] = time.time() + 600
         _recently_migrated.pop(target, None)
+        if not db_success:
+            # DB row never went away — don't leave a stale guard suppressing
+            # legitimate discovery/onboarding of the device that still exists.
+            _recently_removed.pop(target, None)
     except Exception:
         pass
 
