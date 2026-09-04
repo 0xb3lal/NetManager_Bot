@@ -41,6 +41,20 @@ async def _run_stale_cleanup_once():
             if now - last_seen < max_age:
                 continue
 
+            # Whitelisted devices are VIP: fully exempt from stale cleanup,
+            # regardless of how long they have been offline.
+            if mac in state.allowed_macs:
+                continue
+            # Manually-banned devices keep their ban configuration; only
+            # auto-banned (daily_limit) and unbanned devices are purgeable.
+            ban_reason = db.get_ban_reason(mac)
+            if ban_reason not in (None, "daily_limit"):
+                logger.debug(
+                    f"Stale skip {mac}: manual ban (reason={ban_reason}) is "
+                    f"exempt from cleanup."
+                )
+                continue
+
             if db.get_last_seen(mac) != raw:
                 logger.debug(f"Stale skip {mac}: seen again since scan.")
                 continue
