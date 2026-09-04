@@ -100,7 +100,14 @@ def _decode_js_escapes(s: str) -> str:
 
 
 def parse_shell_cgi_result(text: str) -> str:
-    """Extract and decode cmdresult payload from shell.cgi response."""
+    """Extract and decode cmdresult payload from shell.cgi response.
+
+    Returns None when the response is not a genuine cmdresult= payload
+    (e.g. a login page, an HTML error page, or an empty body). Callers
+    must treat None as "read failed" — never as an empty command result.
+    A genuine shell.cgi response always carries the cmdresult wrapper,
+    even when the command output is empty.
+    """
     if text is None:
         return None
     import re
@@ -113,7 +120,10 @@ def parse_shell_cgi_result(text: str) -> str:
     if m2:
         inner = m2.group(1)
         return _decode_js_escapes(inner)
-    return _decode_js_escapes(text)
+    logger.warning(
+        "shell.cgi response missing cmdresult marker — treating as read failure"
+    )
+    return None
 
 
 def run_cmd_output_value(cmd, timeout=15):

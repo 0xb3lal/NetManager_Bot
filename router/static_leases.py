@@ -196,8 +196,19 @@ def fetch_current_entries():
         raise RuntimeError(
             "Failed to fetch current dhcpd_static from router (nvram get failed)"
         )
-    # raw may be empty
+    if not raw:
+        # Empty value is a legitimate state: zero static leases configured.
+        return [], raw
     entries = _parse_raw_entries(raw)
+    if not entries:
+        # Non-empty response but nothing parseable: the read is corrupted
+        # (error text, truncated body, etc.). Aborting here prevents the
+        # read-modify-write from wiping every existing lease with a
+        # single-entry overwrite.
+        raise RuntimeError(
+            "dhcpd_static read looks corrupted: non-empty response "
+            f"({raw[:80]!r}) but zero parseable entries — refusing to push"
+        )
     return entries, raw
 
 
