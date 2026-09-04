@@ -162,13 +162,9 @@ async def _handle_edit(interaction: discord.Interaction, mac: str, new_mac: str)
     was_banned = old in state.banned_macs
     was_pending = old in state.pending_macs
     ip_cache_snapshot = dict(state.ip_to_mac_cache)
-    sessions_snapshot = None
-    try:
-        from services.onboarding import _sessions
-
-        sessions_snapshot = dict(_sessions)
-    except Exception:
-        pass
+    # The onboarding session migrated old->new (if any), captured so rollback
+    # can repair exactly this session instead of clearing the whole registry.
+    migrated_session = None
 
     # Arm the rediscovery TTL guard BEFORE the DB mutation and router push:
     # a discovery cycle running inside the multi-second window must see the
@@ -224,9 +220,9 @@ async def _handle_edit(interaction: discord.Interaction, mac: str, new_mac: str)
             from services.onboarding import _sessions
 
             if old in _sessions:
-                sess = _sessions.pop(old)
-                sess.mac = new
-                _sessions[new] = sess
+                migrated_session = _sessions.pop(old)
+                migrated_session.mac = new
+                _sessions[new] = migrated_session
         except Exception as e:
             logger.warning(f"Failed to migrate onboarding session {old}->{new}: {e}")
     except Exception as e:
@@ -259,21 +255,22 @@ async def _handle_edit(interaction: discord.Interaction, mac: str, new_mac: str)
             state.pending_macs.add(old)
         state.ip_to_mac_cache.clear()
         state.ip_to_mac_cache.update(ip_cache_snapshot)
-        if sessions_snapshot is not None:
-            try:
-                from services.onboarding import _sessions
+        try:
+            from services.onboarding import _sessions
 
-                _sessions.clear()
-                _sessions.update(sessions_snapshot)
-                # Restoring the dict re-keys the session under `old`, but the
-                # forward path mutated the object itself (sess.mac = new).
-                # drop_session / on_timeout / _device_gone all key off
-                # session.mac — restore it so the object matches its key.
-                restored = _sessions.get(old)
-                if restored is not None and restored.mac == new:
-                    restored.mac = old
-            except Exception:
-                pass
+            # Roll back ONLY this command's session — never the whole registry.
+            if migrated_session is not None:
+                current = _sessions.get(new)
+                if current is not None and current is not migrated_session:
+                    logger.warning(
+                        f"Onboarding rollback {old}->{new}: session under {new} "
+                        "is not the migrated one; replacing it"
+                    )
+                _sessions.pop(new, None)
+                migrated_session.mac = old
+                _sessions[old] = migrated_session
+        except Exception:
+            pass
         await interaction.followup.send(
             f"`❌` In-memory state sync failed, rolled back. Error: {e}"
         )
@@ -359,21 +356,22 @@ async def _handle_edit(interaction: discord.Interaction, mac: str, new_mac: str)
             state.pending_macs.add(old)
         state.ip_to_mac_cache.clear()
         state.ip_to_mac_cache.update(ip_cache_snapshot)
-        if sessions_snapshot is not None:
-            try:
-                from services.onboarding import _sessions
+        try:
+            from services.onboarding import _sessions
 
-                _sessions.clear()
-                _sessions.update(sessions_snapshot)
-                # Restoring the dict re-keys the session under `old`, but the
-                # forward path mutated the object itself (sess.mac = new).
-                # drop_session / on_timeout / _device_gone all key off
-                # session.mac — restore it so the object matches its key.
-                restored = _sessions.get(old)
-                if restored is not None and restored.mac == new:
-                    restored.mac = old
-            except Exception:
-                pass
+            # Roll back ONLY this command's session — never the whole registry.
+            if migrated_session is not None:
+                current = _sessions.get(new)
+                if current is not None and current is not migrated_session:
+                    logger.warning(
+                        f"Onboarding rollback {old}->{new}: session under {new} "
+                        "is not the migrated one; replacing it"
+                    )
+                _sessions.pop(new, None)
+                migrated_session.mac = old
+                _sessions[old] = migrated_session
+        except Exception:
+            pass
         await interaction.followup.send(
             f"`❌` Router update failed for `{old}` -> `{new}`: {router_err}. Rolled back, no changes made."
         )
