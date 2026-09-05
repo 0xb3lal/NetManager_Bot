@@ -6,3 +6,6 @@ venv/
 netmanager.db
 __pycache__/
 test/
+.claude/
+.agents/
+skills-lock.json
