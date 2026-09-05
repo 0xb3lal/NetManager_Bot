@@ -27,6 +27,12 @@ def fetch_radius_traffic(verbose=False):
             timeout=RADIUS_LOGIN_TIMEOUT,
         )
 
+        if login_resp.status_code != 200:
+            logger.warning(
+                f"Radius login returned HTTP {login_resp.status_code}: "
+                f"{login_resp.text[:200]!r}"
+            )
+
         if verbose:
             login_resp.raise_for_status()
 
@@ -38,6 +44,12 @@ def fetch_radius_traffic(verbose=False):
         dash = session.get(
             f"{RADIUS_URL}/radiusmanager/user.php", timeout=RADIUS_LOGIN_TIMEOUT
         )
+
+        if dash.status_code != 200:
+            logger.warning(
+                f"Radius dashboard returned HTTP {dash.status_code}: "
+                f"{dash.text[:200]!r}"
+            )
 
         if verbose:
             dash.raise_for_status()
