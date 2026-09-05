@@ -45,6 +45,27 @@ async def banned_macs_autocomplete(interaction: discord.Interaction, current: st
         return []
 
 
+async def pending_macs_autocomplete(interaction: discord.Interaction, current: str):
+    try:
+        macs_list_snapshot = dict(state.macs_list)
+        pending_macs_snapshot = set(state.pending_macs)
+        current_lower = current.lower()
+
+        choices = [
+            app_commands.Choice(
+                name=macs_list_snapshot.get(mac, "Unknown Device"), value=mac
+            )
+            for mac in pending_macs_snapshot
+            if current_lower in mac.lower()
+            or current_lower in macs_list_snapshot.get(mac, "").lower()
+        ]
+        return choices[:25]
+
+    except Exception as e:
+        logger.error(f"Error in pending_macs_autocomplete: {e}")
+        return []
+
+
 async def all_macs_autocomplete(interaction: discord.Interaction, current: str):
     try:
         macs_list_snapshot = dict(state.macs_list)

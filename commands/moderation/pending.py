@@ -3,21 +3,45 @@ from discord import app_commands
 
 import db
 from logger import logger
+from state import state
+from utils.autocomplete import pending_macs_autocomplete
 from utils.discord import safe_defer
+from utils.validators import is_valid_mac
 
 
 def setup(bot):
 
     @bot.tree.command(
         name="pending",
-        description="List devices still awaiting onboarding (blocked until reviewed)",
+        description="List devices awaiting onboarding, or re-run the onboarding questions for one",
     )
     @app_commands.checks.has_permissions(administrator=True)
-    async def pending(interaction: discord.Interaction):
+    @app_commands.describe(
+        action="List pending devices, or review one (re-run its onboarding questions)",
+        mac="The pending device to review (only used with Review)",
+    )
+    @app_commands.choices(
+        action=[
+            app_commands.Choice(name="List", value="list"),
+            app_commands.Choice(name="Review", value="review"),
+        ]
+    )
+    @app_commands.autocomplete(mac=pending_macs_autocomplete)
+    async def pending(
+        interaction: discord.Interaction,
+        action: app_commands.Choice[str] = None,
+        mac: str = None,
+    ):
         if not await safe_defer(interaction, thinking=True):
             return
 
-        logger.info(f"ACTION: /pending | User: {interaction.user}")
+        action_value = action.value if action else "list"
+
+        if action_value == "review":
+            await _handle_review(interaction, mac)
+            return
+
+        logger.info(f"ACTION: /pending list | User: {interaction.user}")
 
         try:
             pending_devices = db.get_pending_devices()
@@ -39,7 +63,7 @@ def setup(bot):
             )
 
             embed.set_footer(
-                text="Pending devices are blocked until allowed via /wl add."
+                text="Use /pending review to re-run a device's onboarding questions."
             )
 
             await interaction.followup.send(embed=embed)
@@ -51,3 +75,51 @@ def setup(bot):
         except Exception as e:
             logger.error(f"FAILURE in /pending command: {e}")
             await interaction.followup.send("`❌` Failed to retrieve pending devices.")
+
+
+async def _handle_review(interaction: discord.Interaction, mac: str | None):
+    # Local import — breaks cycle services ↔ views (same pattern as macs.py).
+    from services.onboarding import _sessions, start_onboarding
+
+    if not mac:
+        await interaction.followup.send(
+            "`❌` A MAC address is required to review a pending device."
+        )
+        return
+
+    mac_upper = mac.strip().upper()
+
+    if not is_valid_mac(mac_upper):
+        await interaction.followup.send("`❌` Invalid MAC Address format.")
+        return
+
+    if mac_upper not in state.pending_macs:
+        await interaction.followup.send(
+            f"`⚠️` `{mac_upper}` is not pending onboarding — nothing to review. "
+            "Use /pending to list devices awaiting onboarding."
+        )
+        return
+
+    if mac_upper in _sessions:
+        await interaction.followup.send(
+            f"`⚠️` An onboarding session is already open for `{mac_upper}`."
+        )
+        return
+
+    hostname = state.macs_list.get(mac_upper, "Unknown")
+
+    await start_onboarding(interaction.client, mac_upper, hostname)
+
+    if mac_upper not in _sessions:
+        await interaction.followup.send(
+            f"`❌` Could not start onboarding for `{mac_upper}` — "
+            "admin channel unavailable."
+        )
+        return
+
+    logger.info(
+        f"ACTION: /pending review | User: {interaction.user} | {mac_upper}"
+    )
+    await interaction.followup.send(
+        f"`✅` Onboarding questions re-posted for `{hostname}` (`{mac_upper}`)."
+    )
