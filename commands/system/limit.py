@@ -7,7 +7,7 @@ from services.limits import (
     recheck_default_limit_devices,
     recheck_device_after_limit_change,
 )
-from services.radius import async_check_and_lock
+from services.lockdown import async_check_and_lock
 from state import state
 from utils.autocomplete import all_macs_autocomplete
 from utils.discord import safe_defer

@@ -1,7 +1,7 @@
 from discord.ext import tasks
 
 from logger import logger
-from services.traffic import async_check_and_lock
+from services.lockdown import async_check_and_lock
 
 
 def setup_traffic_check_task(bot):
