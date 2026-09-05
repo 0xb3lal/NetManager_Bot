@@ -29,29 +29,6 @@ def get_extra_quota(mac: str) -> float:
         return 0.0
 
 
-def add_extra_quota(mac: str, amount_gb: float) -> float | None:
-    """Add extra quota delta for device; returns new total or None on failure."""
-    mac = mac.upper()
-    try:
-        with get_db() as conn:
-            row = conn.execute(
-                "SELECT extra_gb FROM extra_quota WHERE mac = ?", (mac,)
-            ).fetchone()
-            current = float(row["extra_gb"]) if row else 0.0
-            new_total = current + amount_gb
-            conn.execute(
-                "INSERT OR REPLACE INTO extra_quota (mac, extra_gb) VALUES (?, ?)",
-                (mac, new_total),
-            )
-        logger.info(
-            f"Extra quota for {mac} changed by {amount_gb:+.2f} GB -> total {new_total:.2f} GB"
-        )
-        return new_total
-    except Exception as e:
-        logger.error(f"Error updating extra quota for {mac}: {e}")
-        return None
-
-
 def set_extra_quota(mac: str, amount_gb: float) -> float | None:
     """Set extra quota absolute value; returns value or None on failure."""
     mac = mac.upper()
