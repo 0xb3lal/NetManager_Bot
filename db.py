@@ -96,11 +96,13 @@ def init_db():
                 "ALTER TABLE devices ADD COLUMN onboard_status TEXT NOT NULL DEFAULT 'confirmed'"
             )
             logger.info("Migrated 'devices' table: added 'onboard_status' column.")
-        if not _column_exists(conn, "devices", "exempt_daily_limit"):
-            conn.execute(
-                "ALTER TABLE devices ADD COLUMN exempt_daily_limit INTEGER NOT NULL DEFAULT 0"
+        # exempt_daily_limit was an unfinished feature: the column and a
+        # reader existed but nothing ever wrote a 1, so it is removed.
+        if _column_exists(conn, "devices", "exempt_daily_limit"):
+            conn.execute("ALTER TABLE devices DROP COLUMN exempt_daily_limit")
+            logger.info(
+                "Migrated 'devices' table: dropped 'exempt_daily_limit' column."
             )
-            logger.info("Migrated 'devices' table: added 'exempt_daily_limit' column.")
         if not _column_exists(conn, "devices", "anomaly_handled"):
             conn.execute(
                 "ALTER TABLE devices ADD COLUMN anomaly_handled INTEGER NOT NULL DEFAULT 0"
@@ -181,8 +183,8 @@ def add_device(mac: str, hostname: str) -> bool:
             if row is None:
                 conn.execute(
                     "INSERT INTO devices "
-                    "(mac, hostname, allowed, onboard_status, exempt_daily_limit, anomaly_handled, last_seen) "
-                    "VALUES (?, ?, 0, 'pending', 0, 0, ?)",
+                    "(mac, hostname, allowed, onboard_status, anomaly_handled, last_seen) "
+                    "VALUES (?, ?, 0, 'pending', 0, ?)",
                     (mac, hostname, _now_iso()),
                 )
                 logger.info(
@@ -274,28 +276,6 @@ def get_last_seen(mac: str) -> str | None:
     return row["last_seen"] if row else None
 
 
-def is_exempt_from_daily_limit(mac: str) -> bool:
-    mac = mac.upper()
-    with get_db() as conn:
-        row = conn.execute(
-            "SELECT exempt_daily_limit FROM devices WHERE mac = ?", (mac,)
-        ).fetchone()
-    return bool(row) and bool(row["exempt_daily_limit"])
-
-
-def set_exempt_from_daily_limit(mac: str, exempt: bool):
-    mac = mac.upper()
-    try:
-        with get_db() as conn:
-            conn.execute(
-                "UPDATE devices SET exempt_daily_limit = ? WHERE mac = ?",
-                (1 if exempt else 0, mac),
-            )
-        logger.info(f"Daily-limit exemption for {mac} set to {exempt}.")
-    except Exception as e:
-        logger.error(f"Error setting daily-limit exemption for {mac}: {e}")
-
-
 def is_anomaly_handled(mac: str) -> bool:
     mac = mac.upper()
     with get_db() as conn:
@@ -349,7 +329,7 @@ def get_hostname(mac: str) -> str:
 def update_hostname(mac: str, hostname: str) -> bool:
     """Update only the hostname for an existing device.
 
-    Does NOT touch onboard_status, allowed, exempt_daily_limit,
+    Does NOT touch onboard_status, allowed,
     anomaly_handled, last_seen, banned, limits, etc.
     Returns True if row was updated.
     """
@@ -381,7 +361,7 @@ def update_hostname(mac: str, hostname: str) -> bool:
 def migrate_device_mac(old_mac: str, new_mac: str) -> bool:
     """Atomically migrate a device's MAC across all MAC-keyed tables.
 
-    Preserves hostname, allowed, onboard_status, exempt_daily_limit,
+    Preserves hostname, allowed, onboard_status,
     anomaly_handled, last_seen, daily_limits (limit/mode/expires_on),
     extra_quota, banned reason, daily_notified, device_telegram,
     threshold_notified. Returns True on success, False on conflict/error

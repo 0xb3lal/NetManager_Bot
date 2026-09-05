@@ -53,9 +53,6 @@ async def _run_daily_usage_monitor_check(bot):
 
         # --- Phase 2 (no lock): Telegram alerts + classification ---
         for mac, usage_gb in usage_by_mac.items():
-            if db.is_exempt_from_daily_limit(mac):
-                continue
-
             effective_limit = db.get_effective_daily_limit(mac)
             if effective_limit <= 0:
                 continue
