@@ -84,30 +84,6 @@ def _normalize_mac(mac: str) -> str:
     return mac.upper()
 
 
-def _split_unescaped(s: str, delim: str):
-    parts = []
-    cur = []
-    i = 0
-    while i < len(s):
-        if s[i] == "\\" and i + 1 < len(s) and s[i + 1] == delim:
-            cur.append(delim)
-            i += 2
-            continue
-        if s[i] == "\\" and i + 1 < len(s) and s[i + 1] == "\\":
-            cur.append("\\")
-            i += 2
-            continue
-        if s[i] == delim and (delim != "\\"):
-            parts.append("".join(cur))
-            cur = []
-            i += 1
-            continue
-        cur.append(s[i])
-        i += 1
-    parts.append("".join(cur))
-    return parts
-
-
 def _parse_raw_entries(raw: str):
     """Parse raw dhcpd_static string into dicts preserving raw substrings."""
     if not raw or not raw.strip():
