@@ -11,6 +11,7 @@ from services.limits import (
 from state import QUOTA_LOCK, state
 from utils.autocomplete import all_macs_autocomplete
 from utils.discord import safe_defer
+from utils.embeds import error_embed
 from utils.traffic import format_data_size
 from utils.validators import is_valid_mac
 
@@ -29,7 +30,8 @@ class QuotaConfirmView(discord.ui.View):
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         if interaction.user.id != self.author_id:
             await interaction.response.send_message(
-                "`❌` This confirmation isn't for you.", ephemeral=True
+                embed=error_embed("`❌` This confirmation isn't for you."),
+                ephemeral=True,
             )
             return False
         return True
@@ -89,14 +91,18 @@ def setup(bot):
             mac_upper = mac.upper()
 
             if not is_valid_mac(mac_upper):
-                await interaction.followup.send("`❌` Invalid MAC Address format.")
+                await interaction.followup.send(
+                    embed=error_embed("`❌` Invalid MAC Address format")
+                )
                 return
 
             unit_value = unit.value
             value_gb = value / 1024 if unit_value == "MB" else value
 
             if value_gb <= 0:
-                await interaction.followup.send("`❌` Value must be greater than zero.")
+                await interaction.followup.send(
+                    embed=error_embed("`❌` Value must be greater than zero.")
+                )
                 return
 
             is_suspicious = (
@@ -146,7 +152,7 @@ def setup(bot):
 
                 if new_extra_total is None:
                     await interaction.followup.send(
-                        "`❌` Failed to update extra quota."
+                        embed=error_embed("`❌` Failed to update extra quota.")
                     )
                     return
 
@@ -163,7 +169,7 @@ def setup(bot):
                 )
                 if result is None:
                     await interaction.followup.send(
-                        "`❌` Failed to update extra quota."
+                        embed=error_embed("`❌` Failed to update extra quota.")
                     )
                     return
 
@@ -198,4 +204,6 @@ def setup(bot):
 
         except Exception as e:
             logger.error(f"Error in quota command: {e}")
-            await interaction.followup.send("`❌` Failed to update extra quota.")
+            await interaction.followup.send(
+                embed=error_embed("`❌` Failed to update extra quota.")
+            )

@@ -8,6 +8,7 @@ from router.firewall import ban_mac
 from state import ROUTER_LOCK, state
 from utils.autocomplete import mac_autocomplete
 from utils.discord import safe_defer
+from utils.embeds import error_embed
 from utils.validators import is_valid_mac
 
 
@@ -27,7 +28,7 @@ def setup(bot):
 
             if not is_valid_mac(mac_upper):
                 return await interaction.followup.send(
-                    "`❌` Invalid MAC Address format."
+                    embed=error_embed("`❌` Invalid MAC Address format")
                 )
 
             async with ROUTER_LOCK:
@@ -70,7 +71,9 @@ def setup(bot):
 
             try:
                 await interaction.followup.send(
-                    "`❌` Router Error: Connection timed out or failed."
+                    embed=error_embed(
+                        "`❌` Router Error: Connection timed out or failed."
+                    )
                 )
             except Exception:
                 pass

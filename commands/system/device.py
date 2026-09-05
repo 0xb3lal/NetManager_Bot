@@ -10,6 +10,7 @@ from services.traffic import get_today_usage_by_mac
 from state import ROUTER_LOCK, state
 from utils.autocomplete import all_macs_autocomplete
 from utils.discord import safe_defer
+from utils.embeds import error_embed
 from utils.traffic import format_data_size
 from utils.validators import is_valid_mac
 
@@ -31,7 +32,9 @@ def setup(bot):
             mac_upper = mac.upper()
 
             if not is_valid_mac(mac_upper):
-                await interaction.followup.send("`❌` Invalid MAC Address format.")
+                await interaction.followup.send(
+                    embed=error_embed("`❌` Invalid MAC Address format")
+                )
                 return
 
             async with ROUTER_LOCK:
@@ -101,4 +104,6 @@ def setup(bot):
 
         except Exception as e:
             logger.error(f"Error in device command: {e}")
-            await interaction.followup.send("`❌` Failed to fetch device info.")
+            await interaction.followup.send(
+                embed=error_embed("`❌` Failed to fetch device info.")
+            )

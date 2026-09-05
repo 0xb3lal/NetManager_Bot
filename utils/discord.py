@@ -1,6 +1,7 @@
 import discord
 
 from logger import logger
+from utils.embeds import error_embed
 
 
 async def ensure_admin(interaction: discord.Interaction) -> bool:
@@ -12,7 +13,8 @@ async def ensure_admin(interaction: discord.Interaction) -> bool:
     if isinstance(user, discord.Member) and user.guild_permissions.administrator:
         return True
     await interaction.response.send_message(
-        "`❌` Only administrators can answer onboarding questions.", ephemeral=True
+        embed=error_embed("`❌` Only administrators can answer onboarding questions."),
+        ephemeral=True,
     )
     return False
 

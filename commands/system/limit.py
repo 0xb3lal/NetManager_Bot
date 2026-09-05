@@ -11,6 +11,7 @@ from services.lockdown import async_check_and_lock
 from state import state
 from utils.autocomplete import all_macs_autocomplete
 from utils.discord import safe_defer
+from utils.embeds import error_embed, info_embed, warning_embed
 from utils.traffic import format_data_size
 from utils.validators import is_valid_mac
 
@@ -106,7 +107,7 @@ def setup(bot):
 
                 if not cleared_count:
                     await interaction.followup.send(
-                        "`ℹ️` No custom daily limits to reset."
+                        embed=info_embed("`ℹ️` No custom daily limits to reset.")
                     )
                     return
 
@@ -129,13 +130,17 @@ def setup(bot):
                 return
 
             if value is None:
-                await interaction.followup.send("`⚠️` Please provide a value.")
+                await interaction.followup.send(
+                    embed=warning_embed("`⚠️` Please provide a value.")
+                )
                 return
 
             value_gb = value / 1024 if unit_value == "MB" else value
 
             if value_gb <= 0:
-                await interaction.followup.send("`❌` Value must be greater than zero.")
+                await interaction.followup.send(
+                    embed=error_embed("`❌` Value must be greater than zero.")
+                )
                 return
 
             if mac:
@@ -143,7 +148,9 @@ def setup(bot):
                 mac_upper = mac.upper()
 
                 if not is_valid_mac(mac_upper):
-                    await interaction.followup.send("`❌` Invalid MAC Address format.")
+                    await interaction.followup.send(
+                        embed=error_embed("`❌` Invalid MAC Address format")
+                    )
                     return
 
                 mode_value = mode.value if mode else "persistent"
@@ -236,4 +243,6 @@ def setup(bot):
 
             logger.error(f"Error in limit command: {e}")
 
-            await interaction.followup.send("`❌` Failed to update configuration.")
+            await interaction.followup.send(
+                embed=error_embed("`❌` Failed to update configuration.")
+            )

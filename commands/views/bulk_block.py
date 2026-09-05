@@ -6,6 +6,7 @@ import db
 from logger import logger
 from router.firewall import enable_lockdown
 from state import ROUTER_LOCK, state
+from utils.embeds import error_embed
 from utils.validators import is_valid_mac
 
 
@@ -23,7 +24,8 @@ class BulkBlockSelect(discord.ui.Select):
         if isinstance(user, discord.Member) and user.guild_permissions.administrator:
             return True
         await interaction.response.send_message(
-            "`❌` Only administrators can use this.", ephemeral=True
+            embed=error_embed("`❌` Only administrators can use this."),
+            ephemeral=True,
         )
         return False
 

@@ -9,6 +9,7 @@ from router.devices import fetch_devlist
 from router.traffic import get_daily_history, get_speed_history, get_today_combined
 from state import ROUTER_LOCK, state
 from utils.discord import safe_defer
+from utils.embeds import error_embed
 from utils.traffic import bytes_to_mb, format_data_size
 
 
@@ -190,7 +191,9 @@ def setup(bot):
             logger.error(f"Error in netstat: {e}")
 
             try:
-                await interaction.followup.send("`❌` Error compiling network status.")
+                await interaction.followup.send(
+                    embed=error_embed("`❌` Error compiling network status.")
+                )
 
             except Exception:
                 pass

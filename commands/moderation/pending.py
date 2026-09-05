@@ -6,6 +6,7 @@ from logger import logger
 from state import state
 from utils.autocomplete import pending_macs_autocomplete
 from utils.discord import safe_defer
+from utils.embeds import error_embed, success_embed, warning_embed
 from utils.validators import is_valid_mac
 
 
@@ -74,7 +75,9 @@ def setup(bot):
 
         except Exception as e:
             logger.error(f"FAILURE in /pending command: {e}")
-            await interaction.followup.send("`❌` Failed to retrieve pending devices.")
+            await interaction.followup.send(
+                embed=error_embed("`❌` Failed to retrieve pending devices.")
+            )
 
 
 async def _handle_review(interaction: discord.Interaction, mac: str | None):
@@ -83,26 +86,34 @@ async def _handle_review(interaction: discord.Interaction, mac: str | None):
 
     if not mac:
         await interaction.followup.send(
-            "`❌` A MAC address is required to review a pending device."
+            embed=error_embed(
+                "`❌` A MAC address is required to review a pending device."
+            )
         )
         return
 
     mac_upper = mac.strip().upper()
 
     if not is_valid_mac(mac_upper):
-        await interaction.followup.send("`❌` Invalid MAC Address format.")
+        await interaction.followup.send(
+            embed=error_embed("`❌` Invalid MAC Address format")
+        )
         return
 
     if mac_upper not in state.pending_macs:
         await interaction.followup.send(
-            f"`⚠️` `{mac_upper}` is not pending onboarding — nothing to review. "
-            "Use /pending to list devices awaiting onboarding."
+            embed=warning_embed(
+                f"`⚠️` `{mac_upper}` is not pending onboarding — nothing to review.",
+                "Use /pending to list devices awaiting onboarding.",
+            )
         )
         return
 
     if mac_upper in _sessions:
         await interaction.followup.send(
-            f"`⚠️` An onboarding session is already open for `{mac_upper}`."
+            embed=warning_embed(
+                f"`⚠️` An onboarding session is already open for `{mac_upper}`."
+            )
         )
         return
 
@@ -112,8 +123,10 @@ async def _handle_review(interaction: discord.Interaction, mac: str | None):
 
     if mac_upper not in _sessions:
         await interaction.followup.send(
-            f"`❌` Could not start onboarding for `{mac_upper}` — "
-            "admin channel unavailable."
+            embed=error_embed(
+                f"`❌` Could not start onboarding for `{mac_upper}`",
+                "Admin channel unavailable.",
+            )
         )
         return
 
@@ -121,5 +134,7 @@ async def _handle_review(interaction: discord.Interaction, mac: str | None):
         f"ACTION: /pending review | User: {interaction.user} | {mac_upper}"
     )
     await interaction.followup.send(
-        f"`✅` Onboarding questions re-posted for `{hostname}` (`{mac_upper}`)."
+        embed=success_embed(
+            f"`✅` Onboarding questions re-posted for `{hostname}` (`{mac_upper}`)."
+        )
     )

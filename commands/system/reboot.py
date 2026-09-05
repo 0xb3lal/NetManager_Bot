@@ -7,6 +7,7 @@ from logger import logger
 from router.client import is_router_alive
 from router.client import reboot_router as send_reboot_command
 from state import ROUTER_LOCK
+from utils.embeds import error_embed, success_embed, warning_embed
 
 
 async def _wait_for_router_and_notify(channel, user_mention):
@@ -79,7 +80,9 @@ class RebootConfirmView(discord.ui.View):
     ) -> bool:
         if interaction.user.id != self.requester_id:
             await interaction.response.send_message(
-                "`⚠️` Only the user who issued this command " "can confirm it.",
+                embed=warning_embed(
+                    "`⚠️` Only the user who issued this command can confirm it."
+                ),
                 ephemeral=True,
             )
             return False
@@ -137,17 +140,22 @@ class RebootConfirmView(discord.ui.View):
                 )
 
                 await interaction.channel.send(
-                    f"{interaction.user.mention} "
-                    "`✅` Reboot command was sent successfully."
+                    embed=success_embed(
+                        "`✅` Reboot command sent",
+                        f"{interaction.user.mention} The reboot command was "
+                        "sent successfully.",
+                    )
                 )
 
             else:
                 logger.info("Sending 'reboot command failed' " "message to channel.")
 
                 await interaction.channel.send(
-                    f"{interaction.user.mention} "
-                    "`❌` Failed to send the reboot command. "
-                    "Check logs."
+                    embed=error_embed(
+                        "`❌` Reboot command failed",
+                        f"{interaction.user.mention} Failed to send the reboot "
+                        "command. Check logs.",
+                    )
                 )
 
         except Exception as e:
@@ -203,9 +211,10 @@ async def reboot(
 
     try:
         await interaction.response.send_message(
-            (
-                "`⚠️` **Are you sure you want to reboot the router?**\n"
-                "It will be unreachable for a minute or two."
+            embed=warning_embed(
+                "`⚠️` Confirm router reboot",
+                "**Are you sure you want to reboot the router?**\n"
+                "It will be unreachable for a minute or two.",
             ),
             view=RebootConfirmView(interaction.user.id),
         )

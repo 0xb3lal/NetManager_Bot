@@ -3,6 +3,7 @@ import discord
 import db
 from logger import logger
 from state import state
+from utils.embeds import error_embed
 
 
 def setup(bot):
@@ -86,6 +87,8 @@ def setup(bot):
             logger.error(f"FAILURE in /banned_list command: {e}")
 
             try:
-                await interaction.followup.send("`❌` Failed to retrieve the list.")
+                await interaction.followup.send(
+                    embed=error_embed("`❌` Failed to retrieve the list.")
+                )
             except Exception:
                 pass

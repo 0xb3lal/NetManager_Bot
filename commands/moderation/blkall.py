@@ -5,6 +5,7 @@ from commands.views.bulk_block import BulkBlockView
 from logger import logger
 from state import state
 from utils.discord import safe_defer
+from utils.embeds import error_embed, info_embed, warning_embed
 
 
 def setup(bot):
@@ -31,18 +32,25 @@ def setup(bot):
 
             if not options:
                 await interaction.followup.send(
-                    "`⚠️` All saved devices are already blocked or list is empty."
+                    embed=warning_embed(
+                        "`⚠️` All saved devices are already blocked or list is empty."
+                    )
                 )
                 return
 
             view = BulkBlockView(options[:25])
 
             await interaction.followup.send(
-                "Select the saved devices you want to block:",
+                embed=info_embed(
+                    "`🚫` Bulk Block",
+                    "Select the saved devices you want to block:",
+                ),
                 view=view,
             )
 
         except Exception as e:
             logger.error(f"FAILURE in blkall: {e}")
 
-            await interaction.followup.send(f"`❌` Error: {str(e)}")
+            await interaction.followup.send(
+                embed=error_embed("`❌` Error", str(e))
+            )

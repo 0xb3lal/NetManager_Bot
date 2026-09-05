@@ -5,6 +5,7 @@ import discord
 from discord import app_commands
 
 from logger import logger
+from utils.embeds import error_embed
 
 MAX_PURGE_AMOUNT = 1000
 
@@ -29,7 +30,9 @@ async def purge(
     if action.value == "amount" and not amount:
         try:
             await interaction.response.send_message(
-                "`❌` Provide an amount when action is set to Custom Amount.",
+                embed=error_embed(
+                    "`❌` Provide an amount when action is set to Custom Amount."
+                ),
                 ephemeral=True,
             )
         except Exception as e:

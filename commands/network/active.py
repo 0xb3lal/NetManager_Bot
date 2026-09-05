@@ -6,6 +6,7 @@ from logger import logger
 from router.devices import fetch_devlist
 from state import ROUTER_LOCK, state
 from utils.discord import safe_defer
+from utils.embeds import error_embed
 from utils.wireless import rssi_to_quality_pct
 
 
@@ -143,7 +144,7 @@ def setup(bot):
             try:
 
                 await interaction.followup.send(
-                    "`❌` Error compiling active devices status."
+                    embed=error_embed("`❌` Error compiling active devices status.")
                 )
 
             except Exception:

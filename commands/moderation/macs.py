@@ -7,6 +7,7 @@ import db
 from logger import logger
 from state import ROUTER_LOCK, state
 from utils.autocomplete import all_macs_autocomplete
+from utils.embeds import error_embed, info_embed
 from utils.validators import is_valid_mac
 
 
@@ -44,7 +45,8 @@ def setup(bot):
                 and not user.guild_permissions.administrator
             ):
                 await interaction.response.send_message(
-                    "`❌` Only administrators can manage devices.", ephemeral=True
+                    embed=error_embed("`❌` Only administrators can manage devices."),
+                    ephemeral=True,
                 )
                 return
             try:
@@ -84,35 +86,48 @@ def setup(bot):
             )
         except Exception as e:
             logger.error(f"FAILURE in /macs list: {e}")
-            await interaction.followup.send("`❌` Failed to retrieve the MACs list.")
+            await interaction.followup.send(
+                embed=error_embed("`❌` Failed to retrieve the MACs list.")
+            )
 
 
 async def _handle_edit(interaction: discord.Interaction, mac: str, new_mac: str):
     logger.info(f"ACTION: /macs edit | User: {interaction.user} | {mac} -> {new_mac}")
     if not mac or not new_mac:
         await interaction.followup.send(
-            "`❌` Both `mac` (old) and `new_mac` are required for edit."
+            embed=error_embed(
+                "`❌` Both `mac` (old) and `new_mac` are required for edit."
+            )
         )
         return
     old = mac.strip().upper()
     new = new_mac.strip().upper()
     if not is_valid_mac(old):
-        await interaction.followup.send(f"`❌` Invalid old MAC: `{mac}`")
+        await interaction.followup.send(
+            embed=error_embed(f"`❌` Invalid old MAC: `{mac}`")
+        )
         return
     if not is_valid_mac(new):
-        await interaction.followup.send(f"`❌` Invalid new MAC: `{new_mac}`")
+        await interaction.followup.send(
+            embed=error_embed(f"`❌` Invalid new MAC: `{new_mac}`")
+        )
         return
     if old == new:
         await interaction.followup.send(
-            "`ℹ️` Old and new MAC are identical — no change."
+            embed=info_embed("`ℹ️` Old and new MAC are identical — no change.")
         )
         return
     if not db.device_exists(old):
-        await interaction.followup.send(f"`❌` Device not found: `{old}`")
+        await interaction.followup.send(
+            embed=error_embed(f"`❌` Device not found: `{old}`")
+        )
         return
     if db.device_exists(new):
         await interaction.followup.send(
-            f"`❌` New MAC already exists: `{new}` — choose a different MAC or remove the existing device first."
+            embed=error_embed(
+                f"`❌` New MAC already exists: `{new}` — choose a different MAC "
+                "or remove the existing device first."
+            )
         )
         return
     if (
@@ -122,7 +137,7 @@ async def _handle_edit(interaction: discord.Interaction, mac: str, new_mac: str)
         or new in state.pending_macs
     ):
         await interaction.followup.send(
-            f"`❌` New MAC already exists in state: `{new}`"
+            embed=error_embed(f"`❌` New MAC already exists in state: `{new}`")
         )
         return
     try:
@@ -130,7 +145,9 @@ async def _handle_edit(interaction: discord.Interaction, mac: str, new_mac: str)
 
         if new in _sessions:
             await interaction.followup.send(
-                f"`❌` New MAC already has an active onboarding session: `{new}`"
+                embed=error_embed(
+                    f"`❌` New MAC already has an active onboarding session: `{new}`"
+                )
             )
             return
     except Exception:
@@ -150,7 +167,9 @@ async def _handle_edit(interaction: discord.Interaction, mac: str, new_mac: str)
                 new_static_exists = True
         if new_static_exists:
             await interaction.followup.send(
-                f"`❌` New MAC already has a static DHCP entry: `{new}`"
+                embed=error_embed(
+                    f"`❌` New MAC already has a static DHCP entry: `{new}`"
+                )
             )
             return
     except Exception as e:
@@ -191,7 +210,10 @@ async def _handle_edit(interaction: discord.Interaction, mac: str, new_mac: str)
         except Exception:
             pass
         await interaction.followup.send(
-            f"`❌` Database migration failed for `{old}` -> `{new}` (conflict or DB error). No changes made."
+            embed=error_embed(
+                f"`❌` Database migration failed for `{old}` -> `{new}` "
+                "(conflict or DB error). No changes made."
+            )
         )
         return
 
@@ -272,7 +294,9 @@ async def _handle_edit(interaction: discord.Interaction, mac: str, new_mac: str)
         except Exception:
             pass
         await interaction.followup.send(
-            f"`❌` In-memory state sync failed, rolled back. Error: {e}"
+            embed=error_embed(
+                "`❌` In-memory state sync failed, rolled back.", f"Error: {e}"
+            )
         )
         return
 
@@ -373,7 +397,10 @@ async def _handle_edit(interaction: discord.Interaction, mac: str, new_mac: str)
         except Exception:
             pass
         await interaction.followup.send(
-            f"`❌` Router update failed for `{old}` -> `{new}`: {router_err}. Rolled back, no changes made."
+            embed=error_embed(
+                f"`❌` Router update failed for `{old}` -> `{new}`: {router_err}. "
+                "Rolled back, no changes made."
+            )
         )
         return
 
@@ -412,13 +439,17 @@ async def _handle_edit(interaction: discord.Interaction, mac: str, new_mac: str)
 async def _handle_remove(interaction: discord.Interaction, mac: str):
     logger.info(f"ACTION: /macs remove | User: {interaction.user} | {mac}")
     if not mac:
-        await interaction.followup.send("`❌` MAC is required for remove.")
+        await interaction.followup.send(
+            embed=error_embed("`❌` MAC is required for remove.")
+        )
         return
     target = mac.strip().upper()
     if not __import__("utils.validators", fromlist=["is_valid_mac"]).is_valid_mac(
         target
     ):
-        await interaction.followup.send(f"`❌` Invalid MAC: `{mac}`")
+        await interaction.followup.send(
+            embed=error_embed(f"`❌` Invalid MAC: `{mac}`")
+        )
         return
     if not db.device_exists(target):
         if (
@@ -427,7 +458,9 @@ async def _handle_remove(interaction: discord.Interaction, mac: str):
             and target not in state.allowed_macs
             and target not in state.pending_macs
         ):
-            await interaction.followup.send(f"`❌` Device not found: `{target}`")
+            await interaction.followup.send(
+                embed=error_embed(f"`❌` Device not found: `{target}`")
+            )
             return
     was_banned = target in state.banned_macs
     was_allowed = target in state.allowed_macs

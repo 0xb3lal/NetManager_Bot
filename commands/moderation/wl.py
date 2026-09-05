@@ -10,6 +10,7 @@ from router.firewall import enable_lockdown, unban_mac
 from state import ROUTER_LOCK, state
 from utils.autocomplete import wl_macs_autocomplete
 from utils.discord import safe_defer
+from utils.embeds import error_embed, success_embed, warning_embed
 from utils.validators import is_valid_mac
 
 
@@ -46,14 +47,18 @@ async def wl(
             f"Whitelist command: '{action_value}' called without a MAC address."
         )
         return await interaction.followup.send(
-            "`❌` You must provide a MAC address for this action."
+            embed=error_embed(
+                "`❌` You must provide a MAC address for this action."
+            )
         )
 
     mac = mac.upper()
 
     if not is_valid_mac(mac):
         logger.warning(f"Whitelist command: invalid MAC format '{mac}'.")
-        return await interaction.followup.send("`❌` Invalid MAC Address format.")
+        return await interaction.followup.send(
+            embed=error_embed("`❌` Invalid MAC Address format")
+        )
 
     hostname = state.macs_list.get(mac, "Unknown")
 
@@ -61,7 +66,9 @@ async def wl(
         if mac in state.allowed_macs:
             logger.info(f"Whitelist command: add skipped, {mac} already whitelisted.")
             return await interaction.followup.send(
-                f"`⚠️` Device `{hostname}` `({mac})` is already in the whitelist."
+                embed=warning_embed(
+                    f"`⚠️` Device `{hostname}` `({mac})` is already in the whitelist."
+                )
             )
 
         db.add_device(mac, hostname)
@@ -86,7 +93,9 @@ async def wl(
                 )
 
         logger.info(f"Whitelist command: added {hostname} ({mac}) to whitelist.")
-        await interaction.followup.send(f"`✅` Device `{hostname}` added to whitelist.")
+        await interaction.followup.send(
+            embed=success_embed(f"`✅` Device `{hostname}` added to whitelist.")
+        )
 
     elif action_value == "remove":
         if mac in state.allowed_macs:
@@ -105,11 +114,15 @@ async def wl(
                 f"Whitelist command: removed {hostname} ({mac}) from whitelist."
             )
             await interaction.followup.send(
-                f"`✅` Device `{hostname}` removed from whitelist."
+                embed=success_embed(
+                    f"`✅` Device `{hostname}` removed from whitelist."
+                )
             )
         else:
             logger.info(f"Whitelist command: remove skipped, {mac} not in whitelist.")
-            await interaction.followup.send("`⚠️` Device is not in the whitelist.")
+            await interaction.followup.send(
+                embed=warning_embed("`⚠️` Device is not in the whitelist.")
+            )
 
 
 def setup(bot):

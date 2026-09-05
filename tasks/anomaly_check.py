@@ -13,6 +13,7 @@ from logger import logger
 from router.firewall import ban_mac, enable_lockdown, unban_mac
 from services.traffic import get_today_usage_by_mac
 from state import ROUTER_LOCK, acquire_router_lock_bounded, state
+from utils.embeds import error_embed
 from utils.traffic import format_data_size
 
 ANOMALY_PROMPT_TIMEOUT = 1800  # seconds the Recognized/Suspicious question waits
@@ -148,7 +149,8 @@ class AnomalyView(discord.ui.View):
         if isinstance(user, discord.Member) and user.guild_permissions.administrator:
             return True
         await interaction.response.send_message(
-            "`❌` Only administrators can answer this.", ephemeral=True
+            embed=error_embed("`❌` Only administrators can answer this."),
+            ephemeral=True,
         )
         return False
 

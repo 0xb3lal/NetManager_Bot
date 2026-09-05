@@ -5,6 +5,7 @@ import discord
 from logger import logger
 from services.radius import fetch_radius_traffic
 from state import state
+from utils.embeds import error_embed
 
 
 def setup(bot):
@@ -61,4 +62,6 @@ def setup(bot):
 
         except Exception as e:
             logger.error(f"FAILURE in /balance command: {e}")
-            await interaction.followup.send("`❌` Failed to check balance.")
+            await interaction.followup.send(
+                embed=error_embed("`❌` Failed to check balance.")
+            )

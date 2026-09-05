@@ -11,6 +11,7 @@ from services.onboarding import RenameModal
 from state import ROUTER_LOCK, state
 from utils.autocomplete import all_macs_autocomplete
 from utils.discord import safe_defer
+from utils.embeds import error_embed
 from utils.validators import is_valid_mac
 
 
@@ -34,14 +35,22 @@ def setup(bot):
         try:
             mac_upper = mac.strip().upper()
             if not is_valid_mac(mac_upper):
-                await interaction.followup.send("`❌` Invalid MAC address format.")
+                await interaction.followup.send(
+                    embed=error_embed("`❌` Invalid MAC address format.")
+                )
                 return
             if not db.device_exists(mac_upper):
-                await interaction.followup.send("`❌` Device not found in database.")
+                await interaction.followup.send(
+                    embed=error_embed("`❌` Device not found in database.")
+                )
                 return
             if not is_valid_hostname(name.strip()):
                 await interaction.followup.send(
-                    "`❌` Invalid hostname. Use 1-32 alphanumeric/hyphen characters, must start/end with alnum."
+                    embed=error_embed(
+                        "`❌` Invalid hostname.",
+                        "Use 1-32 alphanumeric/hyphen characters, "
+                        "must start/end with alnum.",
+                    )
                 )
                 return
             name = name.strip()
@@ -49,7 +58,9 @@ def setup(bot):
             explicit_ip = ip.strip() if isinstance(ip, str) and ip.strip() else None
             if explicit_ip:
                 if not is_valid_ip(explicit_ip):
-                    await interaction.followup.send("`❌` Invalid IP address format.")
+                    await interaction.followup.send(
+                        embed=error_embed("`❌` Invalid IP address format.")
+                    )
                     return
                 resolved_ip = explicit_ip
             else:
@@ -100,8 +111,11 @@ def setup(bot):
                         )
             if not resolved_ip:
                 await interaction.followup.send(
-                    f"`❌` Could not resolve IP for {mac_upper}.\n\n"
-                    f"Please provide it explicitly:\n`/rename mac:{mac_upper} name:{name} ip:192.168.1.x`"
+                    embed=error_embed(
+                        f"`❌` Could not resolve IP for {mac_upper}.",
+                        "Please provide it explicitly:\n"
+                        f"`/rename mac:{mac_upper} name:{name} ip:192.168.1.x`",
+                    )
                 )
                 return
 
@@ -146,6 +160,8 @@ def setup(bot):
         except Exception as e:
             logger.error(f"Error in rename command: {e}")
             try:
-                await interaction.followup.send("`❌` Failed to rename device.")
+                await interaction.followup.send(
+                    embed=error_embed("`❌` Failed to rename device.")
+                )
             except Exception:
                 pass

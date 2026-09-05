@@ -5,6 +5,7 @@ from commands.views.bulk_unblock import BulkUnblockView
 from logger import logger
 from state import state
 from utils.discord import safe_defer
+from utils.embeds import error_embed, info_embed, warning_embed
 
 
 def setup(bot):
@@ -33,17 +34,24 @@ def setup(bot):
 
             if not options:
                 await interaction.followup.send(
-                    "`⚠️` No devices are currently banned.", ephemeral=True
+                    embed=warning_embed("`⚠️` No devices are currently banned."),
+                    ephemeral=True,
                 )
                 return
 
             view = BulkUnblockView(options[:25])
 
             await interaction.followup.send(
-                "Select the devices you want to unblock:", view=view
+                embed=info_embed(
+                    "`✅` Bulk Unblock",
+                    "Select the devices you want to unblock:",
+                ),
+                view=view,
             )
 
         except Exception as e:
             logger.error(f"FAILURE in rmall: {e}")
 
-            await interaction.followup.send(f"`❌` Error: {str(e)}")
+            await interaction.followup.send(
+                embed=error_embed("`❌` Error", str(e))
+            )
