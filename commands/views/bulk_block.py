@@ -42,8 +42,13 @@ class BulkBlockSelect(discord.ui.Select):
                 if not is_valid_mac(mac):
                     continue
                 if mac not in state.banned_macs:
+                    if not db.ban_device(mac, reason="manual"):
+                        logger.error(
+                            f"Internal: DB ban failed for {mac}; "
+                            f"skipping (state left unchanged)."
+                        )
+                        continue
                     state.banned_macs.add(mac)
-                    db.ban_device(mac, reason="manual")
                     added.append(mac)
                     logger.info(f"Internal: Added {mac} to banned set.")
             if added:
