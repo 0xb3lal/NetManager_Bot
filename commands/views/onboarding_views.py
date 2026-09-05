@@ -131,35 +131,6 @@ class OnboardingQ1View(_OnboardingBaseView):
                 else:
                     drop_session(session.mac)
                 return
-            # DB + speculative pending discard
-            had_pending = session.mac in state.pending_macs
-            try:
-                state.pending_macs.discard(session.mac)
-                db.set_onboarding_confirmed(session.mac)
-            except Exception as e:
-                if had_pending:
-                    state.pending_macs.add(session.mac)
-                logger.error(f"DB confirm failed for {session.mac} (Q1 allow): {e}")
-                try:
-                    await interaction.followup.edit_message(
-                        message_id=session.message.id,
-                        embed=discord.Embed(
-                            title="`⚠️` Update Failed",
-                            description=_info_box(
-                                [
-                                    ("Device:", _device_name(session.mac)),
-                                    ("MAC:", session.mac),
-                                ]
-                            )
-                            + f"\nDatabase error: {e}\nUse /pending to retry manually.",
-                            color=_COLOR_BLOCK,
-                        ),
-                        view=None,
-                    )
-                except Exception as e2:
-                    logger.error(f"Failed to show DB error for {session.mac}: {e2}")
-                drop_session(session.mac)
-                return
             # Local import — breaks cycle with retry helpers (services ↔ views)
             from services.onboarding_retry import _run_router_with_retry
 
@@ -173,6 +144,38 @@ class OnboardingQ1View(_OnboardingBaseView):
                         )
 
             async def _on_success():
+                # Commit only after the router rebuild succeeded: stop
+                # treating the device as pending. If the DB confirm fails,
+                # fail closed by restoring the pending flag (the pending
+                # DROP keeps blocking). Mirrors the Q1 block path below.
+                had_pending = session.mac in state.pending_macs
+                try:
+                    state.pending_macs.discard(session.mac)
+                    db.set_onboarding_confirmed(session.mac)
+                except Exception as e:
+                    if had_pending:
+                        state.pending_macs.add(session.mac)
+                    logger.error(f"DB confirm failed for {session.mac} (Q1 allow): {e}")
+                    try:
+                        await interaction.followup.edit_message(
+                            message_id=session.message.id,
+                            embed=discord.Embed(
+                                title="`⚠️` Update Failed",
+                                description=_info_box(
+                                    [
+                                        ("Device:", _device_name(session.mac)),
+                                        ("MAC:", session.mac),
+                                    ]
+                                )
+                                + f"\nDatabase error: {e}\nUse /pending to retry manually.",
+                                color=_COLOR_BLOCK,
+                            ),
+                            view=None,
+                        )
+                    except Exception as e2:
+                        logger.error(f"Failed to show DB error for {session.mac}: {e2}")
+                    drop_session(session.mac)
+                    return
                 session.step = "q2"
                 session.context = "allowed"
                 await interaction.followup.edit_message(
