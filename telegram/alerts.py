@@ -18,6 +18,9 @@ async def check_and_send_threshold_alerts(
     mac: str, device_name: str, usage_gb: float, effective_limit: float
 ):
     """Alert on Telegram at 25/50/75/100%; mark notified only after confirmed send."""
+    if effective_limit <= 0:
+        # No meaningful percentage against a zero/unset limit — skip.
+        return
     chat_id = telegram_db.get_device_chat_id(mac)
     if not chat_id:
         return
