@@ -7,6 +7,7 @@ import telegram.client as telegram_client
 import telegram.db as telegram_db
 import usage_db
 from config import CHANNEL_ID
+from logger import logger
 from router.firewall import unban_mac
 from services.traffic import get_today_usage_by_mac
 from state import QUOTA_LOCK, ROUTER_LOCK, state
@@ -99,7 +100,12 @@ async def recheck_default_limit_devices(bot_instance):
                 color=0x2ECC71,
             )
 
-            await channel.send(embed=embed)
+            try:
+                await channel.send(embed=embed)
+            except Exception as e:
+                logger.error(
+                    f"Failed to notify about unban of {device_name} ({mac}): {e}"
+                )
 
 
 async def add_extra_quota_covering_overage(bot_instance, mac, amount_gb):
