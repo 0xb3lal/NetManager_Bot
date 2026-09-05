@@ -37,7 +37,7 @@ def setup(bot):
 
             lines = [
                 f"{i:02d}. {state.macs_list.get(m, 'Unknown Device')}"
-                for i, m in enumerate(state.banned_macs, 1)
+                for i, m in enumerate(sorted(state.banned_macs), 1)
             ]
 
             current_list = (
