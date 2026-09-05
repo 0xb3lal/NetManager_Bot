@@ -21,7 +21,13 @@ async def telegram_polling_loop():
                 timeout=_POLL_TIMEOUT,
             )
             for update in updates:
-                last_update_id = update["update_id"]
+                update_id = update.get("update_id")
+                if update_id is None:
+                    logger.warning(
+                        f"Skipping malformed Telegram update without update_id: {update}"
+                    )
+                    continue
+                last_update_id = update_id
                 try:
                     await telegram_commands.handle_update(update)
                 except Exception as e:
